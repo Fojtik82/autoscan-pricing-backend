@@ -1,14 +1,14 @@
 {
   "name": "autoscan-pricing-backend",
-  "version": "1.0.0",
-  "description": "Backend pro AutoScan – AI odhad ceny (OpenAI) + endpoint /estimate",
-  "main": "server.js",
+  "version": "1.0.1",
   "type": "module",
-  "scripts": { "start": "node server.js", "render-build": "echo 'Nothing to build'" },
-  "engines": { "node": ">=18.17 <23" },
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "openai": "^4.56.0"
+    "openai": "^4.57.0"
   }
 }
