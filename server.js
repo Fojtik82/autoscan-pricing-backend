@@ -1,8 +1,14 @@
+// server.js
 import express from "express";
 import cors from "cors";
 import { OpenAI } from "openai";
 
 const PORT = process.env.PORT || 3000;
+
+// === NOVÉ: kurz v env (default 24.5) ===
+const EUR_RATE = Number(process.env.EUR_RATE ?? 24.5);
+
+// OpenAI klíč z env
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 if (!OPENAI_API_KEY) {
   console.error("Missing OPENAI_API_KEY environment variable.");
@@ -16,6 +22,7 @@ app.use((req, res, next) => { req.setTimeout(90_000); res.setTimeout(90_000); ne
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
+// ---------- POMOCNÉ ----------
 function extractJsonSafely(text) {
   if (!text) return null;
   try { return JSON.parse(text); } catch {}
@@ -31,38 +38,61 @@ function extractJsonSafely(text) {
 function buildPrompt(p) {
   const { brand, model, year, mileage, fuel, engine, comparables, vin } = p;
   return `
-Jsi odborník na oceňování ojetých vozů v ČR. Vrať **pouze JSON**:
+Jsi odborník na oceňování ojetých vozů v ČR.
+Vrať **pouze JSON** tohoto tvaru (bez vysvětlování a bez textu okolo):
+
 {
-  "price_estimate": number,
-  "low": number,
-  "high": number,
-  "reasoning": string,
-  "used_data": { "brand": string, "model": string, "year": number, "mileage": number, "fuel": string, "engine": string, "vin": string | null }
+  "price_estimate": number,   // odhad v CZK
+  "low": number,              // dolní hranice v CZK
+  "high": number,             // horní hranice v CZK
+  "reasoning": string,        // 1–2 věty, proč
+  "used_data": {
+    "brand": string, "model": string, "year": number,
+    "mileage": number, "fuel": string, "engine": string, "vin": string | null
+  }
 }
-Ceny v Kč (jen čísla). Zohledni "comparables", pokud jsou.
+
+CENY MUSÍ BÝT V CZK. Pokud uvažuješ v EUR, převeď na CZK kurzem ${EUR_RATE} CZK/EUR.
 
 Vstup:
 - VIN: ${vin || "—"}
 - Vozidlo: ${brand || ""} ${model || ""}, rok ${year || ""}, nájezd ${mileage || ""} km, palivo: ${fuel || ""}, motor: ${engine || ""}
 
-Comparables:
-${JSON.stringify(p.comparables || [], null, 2)}
+Comparables (pokud jsou k dispozici, použij je):
+${JSON.stringify(comparables || [], null, 2)}
 `.trim();
 }
 
+// jednoduchý retry
 async function withRetry(fn, { retries = 2, delayMs = 800 } = {}) {
   let err;
   for (let i = 0; i <= retries; i++) {
-    try { return await fn(); } catch (e) { err = e; if (i === retries) break; await new Promise(r => setTimeout(r, delayMs)); }
+    try { return await fn(); }
+    catch (e) { err = e; if (i === retries) break; await new Promise(r => setTimeout(r, delayMs)); }
   }
   throw err;
 }
 
-app.get("/", (_req, res) => res.json({ ok: true, service: "AutoScan Pricing Backend", version: "1.0.0" }));
+// ---------- ENDPOINTY ----------
 
+// ZÁKLADNÍ INFO
+app.get("/", (_req, res) => res.json({
+  ok: true, service: "AutoScan Pricing Backend", version: "1.0.1", eur_rate: EUR_RATE
+}));
+
+// === NOVÉ: HEALTHCHECK PRO RENDER ===
+app.get("/healthz", (_req, res) => res.json({ status: "ok", ts: Date.now() }));
+
+// ODHAD CENY PŘES CHATGPT
 app.post("/estimate", async (req, res) => {
-  const { brand = "", model = "", year = null, mileage = null, fuel = "", engine = "", comparables = [], vin = null } = req.body || {};
-  if (!brand || !model) return res.status(400).json({ error: "Missing required fields: brand, model" });
+  const {
+    brand = "", model = "", year = null, mileage = null,
+    fuel = "", engine = "", comparables = [], vin = null
+  } = req.body || {};
+
+  if (!brand || !model) {
+    return res.status(400).json({ error: "Missing required fields: brand, model" });
+  }
 
   const prompt = buildPrompt({ brand, model, year, mileage, fuel, engine, comparables, vin });
 
@@ -72,7 +102,7 @@ app.post("/estimate", async (req, res) => {
         model: "gpt-4o-mini",
         input: prompt,
         temperature: 0.3,
-        max_output_tokens: 600,
+        max_output_tokens: 600
       });
     });
 
@@ -99,8 +129,8 @@ app.post("/estimate", async (req, res) => {
         mileage: Number(parsed?.used_data?.mileage ?? mileage ?? 0),
         fuel: String(parsed?.used_data?.fuel ?? fuel ?? ""),
         engine: String(parsed?.used_data?.engine ?? engine ?? ""),
-        vin: parsed?.used_data?.vin ?? vin ?? null,
-      },
+        vin: parsed?.used_data?.vin ?? vin ?? null
+      }
     };
     ["price_estimate", "low", "high"].forEach(k => { if (!Number.isFinite(result[k])) result[k] = 0; });
 
@@ -111,4 +141,5 @@ app.post("/estimate", async (req, res) => {
   }
 });
 
+// START
 app.listen(PORT, () => console.log(`AutoScan Pricing Backend listening on port ${PORT}`));
