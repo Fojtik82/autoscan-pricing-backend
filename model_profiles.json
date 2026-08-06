@@ -1,0 +1,36 @@
+{
+  "__default_compact": {
+    "fuel_weights": { "petrol": 0.60, "diesel": 0.35, "cng": 0.05 },
+    "drive_weights": { "fwd": 0.92, "awd": 0.08 }
+  },
+  "__default_suv": {
+    "fuel_weights": { "petrol": 0.55, "diesel": 0.40, "hybrid": 0.05 },
+    "drive_weights": { "fwd": 0.45, "awd": 0.55 }
+  },
+  "__default_luxury": {
+    "fuel_weights": { "petrol": 0.55, "diesel": 0.40, "hybrid": 0.05 },
+    "drive_weights": { "rwd": 0.35, "awd": 0.55, "fwd": 0.10 }
+  },
+
+  "skoda_octavia_2022": {
+    "fuel_weights": { "petrol": 0.55, "diesel": 0.40, "cng": 0.05 },
+    "drive_weights": { "fwd": 0.95, "awd": 0.05 }
+  },
+  "skoda_octavia_default": {
+    "fuel_weights": { "petrol": 0.55, "diesel": 0.40, "cng": 0.05 },
+    "drive_weights": { "fwd": 0.93, "awd": 0.07 }
+  },
+
+  "skoda_superb_default": {
+    "fuel_weights": { "petrol": 0.50, "diesel": 0.45, "hybrid": 0.05 },
+    "drive_weights": { "fwd": 0.70, "awd": 0.30 }
+  },
+  "skoda_kodiaq_default": {
+    "fuel_weights": { "petrol": 0.55, "diesel": 0.40, "hybrid": 0.05 },
+    "drive_weights": { "awd": 0.70, "fwd": 0.30 }
+  },
+  "volkswagen_golf_default": {
+    "fuel_weights": { "petrol": 0.65, "diesel": 0.30, "hybrid": 0.05 },
+    "drive_weights": { "fwd": 0.96, "awd": 0.04 }
+  }
+}

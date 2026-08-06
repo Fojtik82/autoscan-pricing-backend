@@ -1,117 +1,216 @@
-import express from "express";
+import "dotenv/config";
 import cors from "cors";
-import { OpenAI } from "openai";
+import express from "express";
+import { initDb } from "./db.js";
+import { decodeVinPipeline } from "./decoder_pipeline.js";
+import { initVehicleDb } from "./price_db.js";
+import { normalizeVin, validateVin } from "./vin.js";
 
-const PORT = process.env.PORT || 3000;
-const EUR_RATE = Number(process.env.EUR_RATE ?? 24.5);
-
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-if (!OPENAI_API_KEY) {
-  console.error("Missing OPENAI_API_KEY environment variable.");
-  process.exit(1);
-}
+const PORT = Number(process.env.PORT || 3000);
+const SQLITE_PATH = process.env.SQLITE_PATH || "./vin_cache.db";
+const NHTSA_TIMEOUT_MS = Number(process.env.NHTSA_TIMEOUT_MS || 8000);
+const VEHICLES_DB_PATH =
+  process.env.VEHICLES_DB_PATH || process.env.VEHICLE_DB_PATH || "./data/vehicles_ai.db";
 
 const app = express();
-app.use(express.json({ limit: "1mb" }));
-app.use(cors({ origin: "*", methods: ["POST", "GET", "OPTIONS"] }));
-app.use((req, res, next) => { req.setTimeout(90_000); res.setTimeout(90_000); next(); });
+app.use(express.json({ limit: "2mb" }));
+app.use(cors({ origin: "*", methods: ["GET", "POST", "OPTIONS"] }));
+app.use((req, res, next) => {
+  req.setTimeout(90_000);
+  res.setTimeout(90_000);
+  next();
+});
 
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+const cache = initDb(SQLITE_PATH);
+let vehicleDb = null;
 
-function extractJsonSafely(text) {
-  if (!text) return null;
-  try { return JSON.parse(text); } catch {}
-  const fenced = text.match(/```json\s*([\s\S]*?)\s*```/i);
-  if (fenced) { try { return JSON.parse(fenced[1]); } catch {} }
-  const s = text.indexOf("{"), e = text.lastIndexOf("}");
-  if (s !== -1 && e !== -1 && e > s) { try { return JSON.parse(text.slice(s, e + 1)); } catch {} }
-  return null;
+try {
+  vehicleDb = initVehicleDb(VEHICLES_DB_PATH);
+  console.log("Vehicle price DB loaded", vehicleDb.health());
+} catch (error) {
+  console.error("Vehicle price DB was not loaded:", error.message);
 }
 
-function buildPrompt(p) {
-  const { brand, model, year, mileage, fuel, engine, comparables, vin } = p;
-  return `
-Jsi odborník na oceňování ojetých vozů v ČR.
-Vrať **pouze JSON** ve tvaru:
-{
-  "price_estimate": number,
-  "low": number,
-  "high": number,
-  "reasoning": string,
-  "used_data": { "brand": string, "model": string, "year": number, "mileage": number, "fuel": string, "engine": string, "vin": string | null }
-}
-CENY MUSÍ BÝT V CZK. Pokud uvažuješ v EUR, převeď na CZK kurzem ${EUR_RATE} CZK/EUR.
-
-Vstup:
-- VIN: ${vin || "—"}
-- Vozidlo: ${brand || ""} ${model || ""}, rok ${year || ""}, nájezd ${mileage || ""} km, palivo: ${fuel || ""}, motor: ${engine || ""}
-
-Comparables (pokud jsou):
-${JSON.stringify(comparables || [], null, 2)}
-`.trim();
-}
-
-async function withRetry(fn, { retries = 2, delayMs = 800 } = {}) {
-  let err;
-  for (let i = 0; i <= retries; i++) {
-    try { return await fn(); }
-    catch (e) { err = e; if (i === retries) break; await new Promise(r => setTimeout(r, delayMs)); }
+function vehicleDbRequired(res) {
+  if (vehicleDb) {
+    return true;
   }
-  throw err;
+
+  res.status(503).json({
+    found: false,
+    error: "Cenova databaze neni na serveru nastavena.",
+  });
+  return false;
 }
 
-app.get("/", (_req, res) => res.json({ ok: true, service: "AutoScan Pricing Backend", version: "1.0.1", eur_rate: EUR_RATE }));
-app.get("/healthz", (_req, res) => res.json({ status: "ok", ts: Date.now() }));
+function mapLegacyEstimatePayload(input = {}) {
+  return {
+    brand: input.brand,
+    model: input.model,
+    year: input.year,
+    mileage: input.mileage,
+    mileageKm: input.mileageKm || input.mileage,
+    fuel: input.fuel,
+    motor: input.motor || input.engine,
+    modelDetail: input.modelDetail || input.trim || input.equipment,
+    kw: input.kw || input.powerKw,
+    drive: input.drive,
+    transmission: input.transmission,
+  };
+}
 
-app.post("/estimate", async (req, res) => {
-  const { brand = "", model = "", year = null, mileage = null, fuel = "", engine = "", comparables = [], vin = null } = req.body || {};
-  if (!brand || !model) return res.status(400).json({ error: "Missing required fields: brand, model" });
+function legacyEstimateResponse(result, input = {}) {
+  return {
+    price_estimate: Number(result.price_czk || 0),
+    low: Number(result.low_czk || 0),
+    high: Number(result.high_czk || 0),
+    count: Number(result.count || 0),
+    found: Boolean(result.found),
+    reasoning: result.found
+      ? `Odhad podle ${result.count} podobnych vozu z aktualni databaze CarPrice.`
+      : "Pro zadane parametry nebylo nalezeno dost podobnych vozu.",
+    used_data: {
+      brand: String(input.brand || ""),
+      model: String(input.model || ""),
+      year: Number(input.year || 0),
+      mileage: Number(input.mileageKm || input.mileage || 0),
+      fuel: String(input.fuel || ""),
+      engine: String(input.engine || input.motor || ""),
+      vin: input.vin || null,
+    },
+  };
+}
 
-  const prompt = buildPrompt({ brand, model, year, mileage, fuel, engine, comparables, vin });
+app.get("/", (_req, res) => {
+  res.json({
+    ok: true,
+    service: "AutoScan Pricing Backend",
+    version: "2.0.0",
+    vehicleDb: vehicleDb ? vehicleDb.health() : null,
+  });
+});
+
+app.get("/health", (_req, res) => {
+  res.json({
+    ok: true,
+    ts: Date.now(),
+    vehicleDb: vehicleDb ? vehicleDb.health() : null,
+  });
+});
+
+app.get("/healthz", (_req, res) => {
+  res.json({
+    status: "ok",
+    ts: Date.now(),
+    vehicleDbReady: Boolean(vehicleDb),
+  });
+});
+
+app.get("/price/health", (_req, res) => {
+  if (!vehicleDb) {
+    return res.status(503).json({
+      ok: false,
+      error: "VEHICLES_DB_PATH neni nastaven nebo databaze nejde otevrit.",
+    });
+  }
+  return res.json(vehicleDb.health());
+});
+
+app.post("/price/estimate", (req, res) => {
+  if (!vehicleDbRequired(res)) return;
 
   try {
-    const response = await withRetry(() =>
-      openai.responses.create({
-        model: "gpt-4o-mini",
-        input: prompt,
-        temperature: 0.3,
-        max_output_tokens: 600
-      })
-    );
-
-    const content =
-      response?.output?.[0]?.content?.[0]?.text ??
-      response?.output_text ??
-      response?.choices?.[0]?.message?.content ??
-      "";
-
-    const parsed = extractJsonSafely(content);
-    if (!parsed || typeof parsed !== "object") {
-      return res.status(502).json({ error: "Failed to parse model output", raw: content?.slice?.(0, 2000) || null });
-    }
-
-    const result = {
-      price_estimate: Number(parsed.price_estimate ?? 0),
-      low: Number(parsed.low ?? 0),
-      high: Number(parsed.high ?? 0),
-      reasoning: String(parsed.reasoning ?? ""),
-      used_data: {
-        brand: String(parsed?.used_data?.brand ?? brand ?? ""),
-        model: String(parsed?.used_data?.model ?? model ?? ""),
-        year: Number(parsed?.used_data?.year ?? year ?? 0),
-        mileage: Number(parsed?.used_data?.mileage ?? mileage ?? 0),
-        fuel: String(parsed?.used_data?.fuel ?? fuel ?? ""),
-        engine: String(parsed?.used_data?.engine ?? engine ?? ""),
-        vin: parsed?.used_data?.vin ?? vin ?? null
-      }
-    };
-    ["price_estimate", "low", "high"].forEach(k => { if (!Number.isFinite(result[k])) result[k] = 0; });
-
-    res.json(result);
-  } catch (e) {
-    console.error("OpenAI error:", e?.response?.data || e?.message || e);
-    res.status(500).json({ error: "OpenAI request failed", detail: e?.response?.data || e?.message || "Unknown error" });
+    return res.json(vehicleDb.estimatePrice(req.body || {}));
+  } catch (error) {
+    return res.status(500).json({
+      found: false,
+      error: error.message,
+    });
   }
 });
 
-app.listen(PORT, () => console.log(`AutoScan Pricing Backend listening on port ${PORT}`));
+app.post(["/estimate", "/api/estimate"], (req, res) => {
+  if (!vehicleDbRequired(res)) return;
+
+  try {
+    const payload = mapLegacyEstimatePayload(req.body || {});
+    const result = vehicleDb.estimatePrice(payload);
+    return res.json(legacyEstimateResponse(result, req.body || {}));
+  } catch (error) {
+    return res.status(500).json({
+      error: "Estimate failed",
+      detail: error.message,
+    });
+  }
+});
+
+app.get("/comps", (req, res) => {
+  if (!vehicleDb) {
+    return res.status(503).json({
+      error: "Cenova databaze neni na serveru nastavena.",
+      items: [],
+    });
+  }
+
+  try {
+    const limit = req.query.limit ? Number(req.query.limit) : 12;
+    return res.json(vehicleDb.findComps(req.query || {}, limit));
+  } catch (error) {
+    return res.status(500).json({
+      error: error.message,
+      items: [],
+    });
+  }
+});
+
+app.get("/vin/decode/:vin", async (req, res) => {
+  const vinInput = req.params.vin;
+  const modelYear = req.query.modelYear ? Number(req.query.modelYear) : null;
+  const refresh = String(req.query.refresh || "0") === "1";
+
+  const v = validateVin(normalizeVin(vinInput));
+  if (!v.ok) {
+    return res.status(400).json({
+      vin: v.vin,
+      valid: false,
+      reason: v.reason,
+      source: "local",
+      confidence: 1.0,
+    });
+  }
+
+  if (!refresh) {
+    const cached = cache.get(v.vin);
+    if (cached) return res.json(JSON.parse(cached.payload_json));
+  }
+
+  try {
+    const payload = await decodeVinPipeline(v.vin, {
+      modelYear,
+      timeoutMs: NHTSA_TIMEOUT_MS,
+    });
+
+    cache.upsert({
+      vin: v.vin,
+      valid: 1,
+      payload_json: JSON.stringify(payload),
+      source: payload.source || "mixed",
+      confidence: payload.confidence || 0.5,
+      now: Date.now(),
+    });
+
+    return res.json(payload);
+  } catch (error) {
+    return res.status(500).json({
+      vin: v.vin,
+      valid: false,
+      reason: error.message,
+      source: "backend",
+      confidence: 0,
+    });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`AutoScan Pricing Backend listening on port ${PORT}`);
+});

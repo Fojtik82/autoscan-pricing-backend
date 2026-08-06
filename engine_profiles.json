@@ -1,0 +1,71 @@
+{
+  "__default_compact": {
+    "engine_weights": {
+      "1.5 tsi": 0.35,
+      "1.0 tsi": 0.25,
+      "2.0 tdi": 0.25,
+      "1.6 tdi": 0.10,
+      "hybrid": 0.05
+    }
+  },
+  "__default_suv": {
+    "engine_weights": {
+      "2.0 tdi": 0.45,
+      "1.5 tsi": 0.35,
+      "2.0 tsi": 0.10,
+      "hybrid": 0.10
+    }
+  },
+  "__default_luxury": {
+    "engine_weights": {
+      "2.0 tdi": 0.35,
+      "2.0 tsi": 0.30,
+      "3.0 tdi": 0.20,
+      "3.0 petrol": 0.10,
+      "hybrid": 0.05
+    }
+  },
+
+  "skoda_octavia_2022": {
+    "engine_weights": {
+      "1.5 tsi": 0.55,
+      "2.0 tdi": 0.35,
+      "1.0 tsi": 0.07,
+      "1.5 tgi": 0.03
+    }
+  },
+  "skoda_octavia_default": {
+    "engine_weights": {
+      "1.5 tsi": 0.50,
+      "2.0 tdi": 0.35,
+      "1.0 tsi": 0.10,
+      "1.5 tgi": 0.05
+    }
+  },
+
+  "skoda_superb_default": {
+    "engine_weights": {
+      "2.0 tdi": 0.45,
+      "2.0 tsi": 0.30,
+      "1.5 tsi": 0.15,
+      "hybrid": 0.10
+    }
+  },
+  "skoda_kodiaq_default": {
+    "engine_weights": {
+      "2.0 tdi": 0.50,
+      "1.5 tsi": 0.30,
+      "2.0 tsi": 0.15,
+      "hybrid": 0.05
+    }
+  },
+  "volkswagen_golf_default": {
+    "engine_weights": {
+      "1.5 tsi": 0.40,
+      "1.0 tsi": 0.25,
+      "2.0 tdi": 0.20,
+      "2.0 tsi": 0.10,
+      "hybrid": 0.05
+    }
+  }
+}
