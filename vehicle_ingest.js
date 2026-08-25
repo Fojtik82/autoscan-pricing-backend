@@ -7,7 +7,7 @@ const COLUMNS = [
   "brand", "model", "year", "mileage", "fuel", "motor", "price", "transmission",
   "drive", "vin", "kw", "body", "source_url", "source_db", "title",
   "brand_norm", "model_norm", "fuel_norm", "transmission_norm", "drive_norm",
-  "motor_norm", "engine_ccm", "engine_l", "trim_norm", "equipment",
+  "motor_norm", "engine_ccm", "engine_l", "trim", "trim_norm", "equipment",
   "equipment_fold", "color", "first_registration", "doors", "seats",
 ];
 const ALLOWED_SOURCES = new Set([
@@ -16,6 +16,11 @@ const ALLOWED_SOURCES = new Set([
   "caroffice-anonymized-asking",
   "caroffice-anonymized-sold",
 ]);
+const LOOKUP_FIELDS = [
+  "brand", "model", "year", "fuel", "motor", "transmission", "drive", "vin",
+  "kw", "body", "engine_ccm", "trim", "equipment", "color",
+  "first_registration", "doors", "seats",
+];
 
 function fold(value) {
   return String(value || "")
@@ -82,6 +87,7 @@ export function sanitizeVehicleObservation(record = {}) {
     motor_norm: fold(motor),
     engine_ccm: numericText(record.engine_ccm, 1, 20000),
     engine_l: text(record.engine_l, 20),
+    trim: text(record.trim || record.trim_norm, 300),
     trim_norm: fold(record.trim || record.trim_norm),
     equipment,
     equipment_fold: fold(equipment).slice(0, 12000),
@@ -113,6 +119,19 @@ export function initVehicleIngestDb(dbPath) {
   const update = db.prepare(
     `UPDATE ${TABLE} SET ${COLUMNS.map((column) => `"${column}" = ?`).join(", ")} WHERE rowid = ?`,
   );
+  const lookup = db.prepare(
+    `SELECT ${LOOKUP_FIELDS.map((column) => `"${column}"`).join(", ")}
+       FROM ${TABLE}
+      WHERE vin = ?
+        AND source_db IN (${[...ALLOWED_SOURCES].map(() => "?").join(", ")})
+      ORDER BY CASE source_db
+        WHEN 'caroffice-anonymized-vehicle' THEN 0
+        WHEN 'caroffice-anonymized-sold' THEN 1
+        WHEN 'caroffice-anonymized-asking' THEN 2
+        WHEN 'caroffice-anonymized-purchase' THEN 3
+        ELSE 4
+      END, rowid DESC`,
+  );
   const upsertTransaction = db.transaction((records) => {
     let upserted = 0;
     let rejected = 0;
@@ -137,6 +156,21 @@ export function initVehicleIngestDb(dbPath) {
         throw new Error("records musi obsahovat 1 az 250 anonymnich zaznamu.");
       }
       return upsertTransaction(records);
+    },
+    lookup(vinValue) {
+      const vin = text(vinValue, 17).toUpperCase();
+      if (!/^[A-HJ-NPR-Z0-9]{17}$/.test(vin)) {
+        throw new Error("VIN musi mit 17 platnych znaku.");
+      }
+      const rows = lookup.all(vin, ...ALLOWED_SOURCES);
+      if (!rows.length) return null;
+      const vehicle = { vin };
+      for (const field of LOOKUP_FIELDS) {
+        if (field === "vin") continue;
+        vehicle[field] = rows.map((row) => text(row[field], field === "equipment" ? 12000 : 500))
+          .find(Boolean) || "";
+      }
+      return vehicle;
     },
     close() {
       db.close();

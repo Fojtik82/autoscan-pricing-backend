@@ -153,6 +153,22 @@ app.post("/vehicle-ai/upsert", (req, res) => {
   }
 });
 
+app.post("/vehicle-ai/lookup", (req, res) => {
+  if (!VEHICLE_INGEST_API_KEY || !vehicleIngestDb) {
+    return res.status(503).json({ ok: false, error: "Vehicle lookup neni nakonfigurovan." });
+  }
+  if (!isAuthorizedIngestRequest(req.headers.authorization, VEHICLE_INGEST_API_KEY)) {
+    return res.status(401).json({ ok: false, error: "Neplatne opravneni pro cteni." });
+  }
+  try {
+    const vehicle = vehicleIngestDb.lookup(req.body?.vin);
+    if (!vehicle) return res.status(404).json({ ok: false, found: false });
+    return res.json({ ok: true, found: true, vehicle });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
 app.post(["/estimate", "/api/estimate"], (req, res) => {
   if (!vehicleDbRequired(res)) return;
 

@@ -46,6 +46,32 @@ function requestJson(port, authorization, records) {
   });
 }
 
+function lookupJson(port, authorization, vin) {
+  const payload = JSON.stringify({ vin });
+  return new Promise((resolve) => {
+    const request = http.request({
+      hostname: "127.0.0.1",
+      port,
+      path: "/vehicle-ai/lookup",
+      method: "POST",
+      headers: {
+        authorization,
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(payload),
+      },
+    }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => resolve({
+        status: response.statusCode,
+        body: JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"),
+      }));
+    });
+    request.on("error", (error) => resolve({ status: 0, body: { error: error.message } }));
+    request.end(payload);
+  });
+}
+
 function getJson(port, requestPath) {
   return new Promise((resolve) => {
     http.get({ hostname: "127.0.0.1", port, path: requestPath }, (response) => {
@@ -71,6 +97,18 @@ test("authenticated anonymous observations upsert without account data", () => {
       brand: "Skoda",
       model: "Octavia",
       year: 2020,
+      fuel: "Nafta",
+      motor: "2.0 TDI",
+      transmission: "Automat",
+      drive: "4x4",
+      kw: 110,
+      engine_ccm: 1968,
+      body: "Kombi",
+      trim: "Style",
+      color: "Modra",
+      first_registration: "2020-03-12",
+      doors: 5,
+      seats: 5,
       equipment: "Adaptivni tempomat",
       tenant_id: "dealer-a",
       customer_name: "Zakaznik",
@@ -86,6 +124,29 @@ test("authenticated anonymous observations upsert without account data", () => {
     assert.deepEqual(ingest.upsert([
       { ...base, source_db: "caroffice-anonymized-asking", price: 410000 },
     ]), { upserted: 1, rejected: 0 });
+    const remembered = ingest.lookup(base.vin);
+    assert.deepEqual(remembered, {
+      vin: base.vin,
+      brand: "Skoda",
+      model: "Octavia",
+      year: "2020",
+      fuel: "Nafta",
+      motor: "2.0 TDI",
+      transmission: "Automat",
+      drive: "4x4",
+      kw: "110",
+      body: "Kombi",
+      engine_ccm: "1968",
+      trim: "Style",
+      equipment: "Adaptivni tempomat",
+      color: "Modra",
+      first_registration: "2020-03-12",
+      doors: "5",
+      seats: "5",
+    });
+    for (const forbidden of ["price", "mileage", "source_db", "source_url", "tenant_id", "customer_name"]) {
+      assert.ok(!(forbidden in remembered), `Forbidden lookup field: ${forbidden}`);
+    }
     ingest.close();
 
     const db = new Database(dbPath, { readonly: true });
@@ -146,6 +207,14 @@ test("HTTP ingest endpoint rejects a wrong key and accepts the shared key", { ti
     const accepted = await requestJson(port, "Bearer shared-secret", [record]);
     assert.equal(accepted.status, 200);
     assert.deepEqual(accepted.body, { ok: true, upserted: 1, rejected: 0 });
+    const lookupDenied = await lookupJson(port, "Bearer wrong", record.vin);
+    assert.equal(lookupDenied.status, 401);
+    const lookupAccepted = await lookupJson(port, "Bearer shared-secret", record.vin);
+    assert.equal(lookupAccepted.status, 200);
+    assert.equal(lookupAccepted.body.vehicle.vin, record.vin);
+    assert.equal(lookupAccepted.body.vehicle.brand, "Skoda");
+    assert.ok(!("price" in lookupAccepted.body.vehicle));
+    assert.ok(!("mileage" in lookupAccepted.body.vehicle));
     const comps = await getJson(port, "/comps?brand=Skoda&model=Octavia&year=2020&limit=5");
     assert.equal(comps.status, 200);
     assert.ok(Array.isArray(comps.body));
