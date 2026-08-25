@@ -1,9 +1,9 @@
 import "dotenv/config";
-import cors from "cors";
 import express from "express";
 import { initDb } from "./db.js";
 import { decodeVinPipeline } from "./decoder_pipeline.js";
 import { initVehicleDb } from "./price_db.js";
+import { initVehicleIngestDb, isAuthorizedIngestRequest } from "./vehicle_ingest.js";
 import { normalizeVin, validateVin } from "./vin.js";
 
 const PORT = Number(process.env.PORT || 3000);
@@ -11,10 +11,17 @@ const SQLITE_PATH = process.env.SQLITE_PATH || "./vin_cache.db";
 const NHTSA_TIMEOUT_MS = Number(process.env.NHTSA_TIMEOUT_MS || 8000);
 const VEHICLES_DB_PATH =
   process.env.VEHICLES_DB_PATH || process.env.VEHICLE_DB_PATH || "./data/vehicles_ai.db";
+const VEHICLE_INGEST_API_KEY = String(process.env.VEHICLE_INGEST_API_KEY || "");
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
-app.use(cors({ origin: "*", methods: ["GET", "POST", "OPTIONS"] }));
+app.use((req, res, next) => {
+  res.setHeader("access-control-allow-origin", "*");
+  res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
+  res.setHeader("access-control-allow-headers", "authorization, content-type");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  return next();
+});
 app.use((req, res, next) => {
   req.setTimeout(90_000);
   res.setTimeout(90_000);
@@ -23,9 +30,11 @@ app.use((req, res, next) => {
 
 const cache = initDb(SQLITE_PATH);
 let vehicleDb = null;
+let vehicleIngestDb = null;
 
 try {
   vehicleDb = initVehicleDb(VEHICLES_DB_PATH);
+  if (VEHICLE_INGEST_API_KEY) vehicleIngestDb = initVehicleIngestDb(VEHICLES_DB_PATH);
   console.log("Vehicle price DB loaded", vehicleDb.health());
 } catch (error) {
   console.error("Vehicle price DB was not loaded:", error.message);
@@ -126,6 +135,21 @@ app.post("/price/estimate", (req, res) => {
       found: false,
       error: error.message,
     });
+  }
+});
+
+app.post("/vehicle-ai/upsert", (req, res) => {
+  if (!VEHICLE_INGEST_API_KEY || !vehicleIngestDb) {
+    return res.status(503).json({ ok: false, error: "Vehicle ingest neni nakonfigurovan." });
+  }
+  if (!isAuthorizedIngestRequest(req.headers.authorization, VEHICLE_INGEST_API_KEY)) {
+    return res.status(401).json({ ok: false, error: "Neplatne opravneni pro zapis." });
+  }
+  try {
+    const result = vehicleIngestDb.upsert(req.body?.records);
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
   }
 });
 

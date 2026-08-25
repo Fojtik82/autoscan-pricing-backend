@@ -170,9 +170,27 @@ function scoreVehicle(vehicle, request) {
   return score;
 }
 
+function normalizeModelInput(brand, model) {
+  const brandNorm = fold(brand);
+  const modelNorm = fold(model);
+  if (["mercedes benz", "mercedes"].includes(brandNorm)) {
+    const match = modelNorm.match(/^(gle|glc|gls|cla|cls|gla|glb)\b/);
+    if (match) return match[1].toUpperCase();
+  }
+  if (brandNorm === "ford") {
+    const match = modelNorm.match(/^f\s*(\d{3})\b/);
+    if (match) return `F-${match[1]}`;
+  }
+  if (brandNorm === "saab") {
+    const match = modelNorm.match(/^9\s*([357])\b/);
+    if (match) return `9-${match[1]}`;
+  }
+  return model;
+}
+
 function normalizeRequest(input = {}) {
   const brand = input.brand || input.make || "";
-  const model = input.model || "";
+  const model = normalizeModelInput(brand, input.model || "");
   const modelDetail = input.modelDetail || input.equipment || input.trim || "";
   const mileageKm = parseNumber(input.mileageKm || input.mileage || input.odometerKm);
 
@@ -195,7 +213,15 @@ function normalizeRequest(input = {}) {
 }
 
 function buildWhere(request, attempt) {
-  const where = ["price IS NOT NULL", "TRIM(price) <> ''"];
+  const where = [
+    "price IS NOT NULL",
+    "TRIM(price) <> ''",
+    `(source_db IS NULL OR lower(source_db) NOT IN (
+      'caroffice-dealer-inzerat',
+      'caroffice-dealer-prodano',
+      'caroffice-anonymized-purchase'
+    ))`,
+  ];
   const params = {};
 
   if (request.brandNorm) {
