@@ -3,6 +3,7 @@ import express from "express";
 import { initDb } from "./db.js";
 import { decodeVinPipeline } from "./decoder_pipeline.js";
 import { initVehicleDb } from "./price_db.js";
+import { initSearchLogsDb } from "./search_logs.js";
 import { initVehicleIngestDb, isAuthorizedIngestRequest } from "./vehicle_ingest.js";
 import { normalizeVin, validateVin } from "./vin.js";
 
@@ -12,6 +13,7 @@ const NHTSA_TIMEOUT_MS = Number(process.env.NHTSA_TIMEOUT_MS || 8000);
 const VEHICLES_DB_PATH =
   process.env.VEHICLES_DB_PATH || process.env.VEHICLE_DB_PATH || "./data/vehicles_ai.db";
 const VEHICLE_INGEST_API_KEY = String(process.env.VEHICLE_INGEST_API_KEY || "");
+const SEARCH_LOGS_ADMIN_KEY = String(process.env.SEARCH_LOGS_ADMIN_KEY || "");
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -29,6 +31,7 @@ app.use((req, res, next) => {
 });
 
 const cache = initDb(SQLITE_PATH);
+const searchLogs = initSearchLogsDb(SQLITE_PATH);
 let vehicleDb = null;
 let vehicleIngestDb = null;
 
@@ -50,6 +53,26 @@ function vehicleDbRequired(res) {
     error: "Cenova databaze neni na serveru nastavena.",
   });
   return false;
+}
+
+function requireSearchLogAdmin(req, res) {
+  if (!SEARCH_LOGS_ADMIN_KEY) {
+    res.status(503).json({
+      ok: false,
+      error: "SEARCH_LOGS_ADMIN_KEY neni nastaven.",
+    });
+    return false;
+  }
+
+  if (req.headers.authorization !== `Bearer ${SEARCH_LOGS_ADMIN_KEY}`) {
+    res.status(401).json({
+      ok: false,
+      error: "Neplatne opravneni pro cteni search logs.",
+    });
+    return false;
+  }
+
+  return true;
 }
 
 function mapLegacyEstimatePayload(input = {}) {
@@ -136,6 +159,44 @@ app.post("/price/estimate", (req, res) => {
       error: error.message,
     });
   }
+});
+
+app.post(["/search-logs", "/api/search-logs"], (req, res) => {
+  try {
+    const result = searchLogs.insert(req.body || {}, {
+      userAgent: req.headers["user-agent"],
+    });
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    return res.status(400).json({
+      ok: false,
+      error: error.message,
+    });
+  }
+});
+
+app.get(["/search-logs", "/api/search-logs"], (req, res) => {
+  if (!requireSearchLogAdmin(req, res)) return;
+
+  return res.json({
+    ok: true,
+    items: searchLogs.list({
+      limit: req.query.limit,
+      offset: req.query.offset,
+    }),
+  });
+});
+
+app.get(["/search-logs/summary", "/api/search-logs/summary"], (req, res) => {
+  if (!requireSearchLogAdmin(req, res)) return;
+
+  return res.json({
+    ok: true,
+    summary: searchLogs.summary({
+      days: req.query.days,
+      limit: req.query.limit,
+    }),
+  });
 });
 
 app.post("/vehicle-ai/upsert", (req, res) => {
