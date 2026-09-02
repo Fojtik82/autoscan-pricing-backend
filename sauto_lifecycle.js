@@ -50,6 +50,7 @@ export function hasSautoLifecycleSchema(db, table = DEFAULT_TABLE) {
   return [
     "is_active",
     "last_seen_at",
+    "last_checked_at",
     "missing_since",
     "missing_checks",
     "inactive_at",
@@ -63,6 +64,7 @@ export function ensureSautoLifecycleSchema(db, table = DEFAULT_TABLE) {
   const additions = [
     ["is_active", "INTEGER NOT NULL DEFAULT 1"],
     ["last_seen_at", "TEXT"],
+    ["last_checked_at", "TEXT"],
     ["missing_since", "TEXT"],
     ["missing_checks", "INTEGER NOT NULL DEFAULT 0"],
     ["inactive_at", "TEXT"],
@@ -95,7 +97,7 @@ export function reconcileSautoLifecycle(
   const nowIso = now.toISOString();
   const graceChecks = Math.max(1, Math.round(Number(missingChecksBeforeInactive) || 3));
   const rows = db.prepare(
-    `SELECT rowid, source_url, is_active, last_seen_at, missing_since,
+    `SELECT rowid, source_url, is_active, last_seen_at, last_checked_at, missing_since,
             missing_checks, inactive_at
        FROM ${JSON.stringify(table)}
       WHERE source_url IS NOT NULL
@@ -107,6 +109,7 @@ export function reconcileSautoLifecycle(
     `UPDATE ${JSON.stringify(table)}
         SET is_active = 1,
             last_seen_at = ?,
+            last_checked_at = ?,
             missing_since = NULL,
             missing_checks = 0,
             inactive_at = NULL
@@ -115,7 +118,8 @@ export function reconcileSautoLifecycle(
   const markMissing = dryRun ? null : db.prepare(
     `UPDATE ${JSON.stringify(table)}
         SET missing_since = COALESCE(missing_since, ?),
-            missing_checks = ?
+            missing_checks = ?,
+            last_checked_at = ?
       WHERE rowid = ?`,
   );
   const markInactive = dryRun ? null : db.prepare(
@@ -123,6 +127,7 @@ export function reconcileSautoLifecycle(
         SET is_active = 0,
             missing_since = COALESCE(missing_since, ?),
             missing_checks = ?,
+            last_checked_at = ?,
             inactive_at = COALESCE(inactive_at, ?)
       WHERE rowid = ?`,
   );
@@ -136,6 +141,7 @@ export function reconcileSautoLifecycle(
     deactivated: 0,
     already_inactive: 0,
     invalid_urls: 0,
+    already_checked_today: 0,
   };
 
   const apply = () => {
@@ -151,7 +157,12 @@ export function reconcileSautoLifecycle(
       if (normalizedLiveIds.has(itemId)) {
         stats.live += 1;
         if (!wasActive) stats.reactivated += 1;
-        if (markSeen) markSeen.run(nowIso, row.rowid);
+        if (markSeen) markSeen.run(nowIso, nowIso, row.rowid);
+        continue;
+      }
+
+      if (String(row.last_checked_at || "").slice(0, 10) === nowIso.slice(0, 10)) {
+        stats.already_checked_today += 1;
         continue;
       }
 
@@ -162,10 +173,10 @@ export function reconcileSautoLifecycle(
       if (missingChecks >= graceChecks) {
         if (wasActive) stats.deactivated += 1;
         else stats.already_inactive += 1;
-        if (markInactive) markInactive.run(nowIso, missingChecks, nowIso, row.rowid);
+        if (markInactive) markInactive.run(nowIso, missingChecks, nowIso, nowIso, row.rowid);
       } else {
         stats.pending_missing += 1;
-        if (markMissing) markMissing.run(nowIso, missingChecks, row.rowid);
+        if (markMissing) markMissing.run(nowIso, missingChecks, nowIso, row.rowid);
       }
     }
   };

@@ -78,6 +78,15 @@ test("Sauto rows become inactive after three missing checks and can reactivate",
   assert.equal(first.pending_missing, 1);
   assert.equal(first.invalid_urls, 1);
 
+  const retry = reconcileSautoLifecycle(db, liveIds, {
+    now: new Date("2026-09-01T12:00:00Z"),
+  });
+  assert.equal(retry.already_checked_today, 1);
+  assert.equal(
+    db.prepare("SELECT missing_checks FROM vehicle_app WHERE title = 'missing'").get().missing_checks,
+    1,
+  );
+
   reconcileSautoLifecycle(db, liveIds, { now: new Date("2026-09-02T08:00:00Z") });
   const third = reconcileSautoLifecycle(db, liveIds, {
     now: new Date("2026-09-03T08:00:00Z"),

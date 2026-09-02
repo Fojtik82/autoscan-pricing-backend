@@ -34,6 +34,17 @@ SAUTO_RECONCILE_CONCURRENCY=4
 SAUTO_RECONCILE_PAGE_LIMIT=1000
 SAUTO_RECONCILE_BUCKET_LIMIT=8000
 SAUTO_MISSING_CHECKS_BEFORE_INACTIVE=3
+SAUTO_ENABLED=1
+BAZOS_ENABLED=1
+BAZOS_RECONCILE_ENABLED=1
+BAZOS_DAILY_LOOKBACK_DAYS=2
+BAZOS_MAX_DAILY_PAGES_PER_CATEGORY=2000
+BAZOS_MIN_DAILY_PAGES_PER_CATEGORY=3
+BAZOS_DAILY_CONCURRENCY=2
+BAZOS_DETAIL_CONCURRENCY=3
+BAZOS_SITEMAP_CONCURRENCY=3
+BAZOS_REQUEST_DELAY_MS=250
+BAZOS_FETCH_DETAILS=1
 ```
 
 `GITHUB_TOKEN` must be a GitHub token with write access to repository contents.
@@ -55,8 +66,12 @@ Do not put it into the repository.
    `inactive_at`.
 7. Marks a listing inactive only after it is absent from three consecutive
    successful daily checks. A listing that appears again is reactivated.
-8. Compresses the updated DB and commits `data/vehicles_ai.db.gz` back to `main`.
-9. The existing Render web service restores the DB archive during startup and
+8. Scrapes Bazoš passenger-car categories, vans, pick-ups, minibuses, and
+   vehicle-only motorcycle categories. It validates all current Bazoš IDs via
+   the public Auto and Motorky sitemap indexes and applies the same three-check
+   lifecycle without deleting historical rows.
+9. Compresses the updated DB and commits `data/vehicles_ai.db.gz` back to `main`.
+10. The existing Render web service restores the DB archive during startup and
    auto-deploys the new commit. Price estimates
    and comparable listings automatically exclude rows with `is_active = 0`.
 

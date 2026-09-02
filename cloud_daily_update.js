@@ -5,6 +5,21 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import {
+  hasSafeBazosCoverage,
+  parseBazosListing,
+  reconcileBazosLifecycle,
+} from "./bazos_lifecycle.js";
+import {
+  BAZOS_DAILY_CATEGORIES,
+  bazosCategoryPageUrl,
+  createBazosTaxonomy,
+  parseBazosDetail,
+  parseBazosListingPage,
+  parseBazosSitemapDetail,
+  parseBazosSitemapIndex,
+  parseBazosSiteTotal,
+} from "./bazos_scraper.js";
+import {
   buildSautoListingUrl,
   ensureSautoLifecycleSchema,
   hasSafeSautoCoverage,
@@ -25,6 +40,7 @@ const TABLE = "vehicle_app";
 const options = new Set(process.argv.slice(2));
 const DRY_RUN = options.has("--dry-run") || process.env.DRY_RUN === "1";
 
+const SAUTO_ENABLED = process.env.SAUTO_ENABLED !== "0";
 const LIMIT = Number(process.env.SAUTO_LIMIT || 200);
 const MAX_PAGES = Number(process.env.SAUTO_MAX_PAGES || 80);
 const DETAIL_CONCURRENCY = Number(process.env.SAUTO_DETAIL_CONCURRENCY || 8);
@@ -53,6 +69,38 @@ const SAUTO_CATEGORIES = new Map([
   [842, "ctyrkolky"],
 ]);
 const DAILY_INGEST_CATEGORY_IDS = [838, 839, 841];
+
+const BAZOS_ENABLED = process.env.BAZOS_ENABLED !== "0";
+const BAZOS_RECONCILE_ENABLED = process.env.BAZOS_RECONCILE_ENABLED !== "0";
+const BAZOS_DAILY_LOOKBACK_DAYS = Math.max(
+  1,
+  Number(process.env.BAZOS_DAILY_LOOKBACK_DAYS || 2),
+);
+const BAZOS_MAX_DAILY_PAGES_PER_CATEGORY = Math.max(
+  1,
+  Number(process.env.BAZOS_MAX_DAILY_PAGES_PER_CATEGORY || 2000),
+);
+const BAZOS_MIN_DAILY_PAGES_PER_CATEGORY = Math.max(
+  1,
+  Number(process.env.BAZOS_MIN_DAILY_PAGES_PER_CATEGORY || 3),
+);
+const BAZOS_DAILY_CONCURRENCY = Math.max(
+  1,
+  Math.min(4, Number(process.env.BAZOS_DAILY_CONCURRENCY || 2)),
+);
+const BAZOS_DETAIL_CONCURRENCY = Math.max(
+  1,
+  Math.min(6, Number(process.env.BAZOS_DETAIL_CONCURRENCY || 3)),
+);
+const BAZOS_SITEMAP_CONCURRENCY = Math.max(
+  1,
+  Math.min(6, Number(process.env.BAZOS_SITEMAP_CONCURRENCY || 3)),
+);
+const BAZOS_REQUEST_DELAY_MS = Math.max(
+  0,
+  Number(process.env.BAZOS_REQUEST_DELAY_MS || 250),
+);
+const BAZOS_FETCH_DETAILS = process.env.BAZOS_FETCH_DETAILS !== "0";
 
 const GITHUB_REPO = process.env.GITHUB_REPO || "Fojtik82/autoscan-pricing-backend";
 const GITHUB_BRANCH = process.env.GITHUB_BRANCH || "main";
@@ -91,6 +139,7 @@ const insertColumns = [
   "trim_norm",
   "is_active",
   "last_seen_at",
+  "last_checked_at",
   "missing_since",
   "missing_checks",
   "inactive_at",
@@ -125,6 +174,10 @@ function run(command, args, opts = {}) {
     stdout: result.stdout || "",
     stderr: result.stderr || "",
   };
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function normalize(value) {
@@ -274,6 +327,7 @@ function toRow(detail) {
     trim_norm: extractTrim(detail),
     is_active: 1,
     last_seen_at: scrapedAt,
+    last_checked_at: null,
     missing_since: null,
     missing_checks: 0,
     inactive_at: null,
@@ -304,6 +358,35 @@ async function fetchJson(url, attempt = 1) {
     if (attempt < 5 && !/^4\d\d /.test(String(error.message || error))) {
       await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
       return fetchJson(url, attempt + 1);
+    }
+    throw error;
+  }
+}
+
+async function fetchText(url, attempt = 1) {
+  try {
+    const response = await fetch(url, {
+      headers: {
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "cs",
+        "user-agent": "Mozilla/5.0 CarPrice vehicle inventory updater",
+      },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) {
+      if (attempt < 5 && [429, 500, 502, 503, 504].includes(response.status)) {
+        await sleep(attempt * 2000);
+        return fetchText(url, attempt + 1);
+      }
+      throw new Error(`${response.status} ${response.statusText}: ${url}`);
+    }
+    const text = await response.text();
+    if (BAZOS_REQUEST_DELAY_MS > 0) await sleep(BAZOS_REQUEST_DELAY_MS);
+    return text;
+  } catch (error) {
+    if (attempt < 5 && !/^4\d\d /.test(String(error.message || error))) {
+      await sleep(attempt * 2000);
+      return fetchText(url, attempt + 1);
     }
     throw error;
   }
@@ -579,6 +662,181 @@ function loadExistingUrls(db) {
   return new Set(rows.map((row) => row.source_url));
 }
 
+function loadExistingBazosKeys(db) {
+  const rows = db.prepare(
+    `SELECT source_url FROM ${TABLE}
+      WHERE source_url IS NOT NULL
+        AND (
+          lower(source_url) LIKE 'https://auto.bazos.cz/inzerat/%'
+          OR lower(source_url) LIKE 'https://motorky.bazos.cz/inzerat/%'
+        )`,
+  ).all();
+  const keys = new Set();
+  for (const row of rows) {
+    const listing = parseBazosListing(row.source_url);
+    if (listing) keys.add(listing.key);
+  }
+  return keys;
+}
+
+function loadBazosTaxonomy(db) {
+  const rows = db.prepare(
+    `SELECT DISTINCT brand, model FROM ${TABLE}
+      WHERE brand IS NOT NULL AND TRIM(brand) <> ''
+        AND model IS NOT NULL AND TRIM(model) <> ''`,
+  ).all();
+  return createBazosTaxonomy(rows);
+}
+
+function cutoffCalendarDate(lookbackDays) {
+  const value = new Date();
+  value.setUTCDate(value.getUTCDate() - Math.max(0, lookbackDays - 1));
+  return value.toISOString().slice(0, 10);
+}
+
+async function fetchBazosDailyCategory(category, cutoffDate) {
+  const found = [];
+  let total = null;
+  let quietPages = 0;
+  let pages = 0;
+  let reachedSafetyLimit = false;
+
+  for (let offset = 0; total === null || offset < total; offset += 20) {
+    if (pages >= BAZOS_MAX_DAILY_PAGES_PER_CATEGORY) {
+      reachedSafetyLimit = true;
+      break;
+    }
+    const url = bazosCategoryPageUrl(category, offset);
+    const parsed = parseBazosListingPage(await fetchText(url), category);
+    total = parsed.total;
+    const recent = parsed.listings.filter(
+      (listing) => listing.postedDate && listing.postedDate >= cutoffDate,
+    );
+    found.push(...recent);
+    pages += 1;
+    quietPages = recent.length ? 0 : quietPages + 1;
+    if (!parsed.listings.length || offset + 20 >= total) break;
+    if (pages >= BAZOS_MIN_DAILY_PAGES_PER_CATEGORY && quietPages >= 2) break;
+  }
+
+  if (reachedSafetyLimit && quietPages < 2 && pages * 20 < (total || 0)) {
+    throw new Error(
+      `Bazos daily category ${category.group}/${category.slug} reached the `
+      + `${BAZOS_MAX_DAILY_PAGES_PER_CATEGORY}-page safety limit before the date cutoff`,
+    );
+  }
+
+  console.log(
+    `Bazos daily category=${category.group}/${category.slug} pages=${pages} `
+    + `recent=${found.length} total=${total ?? 0}`,
+  );
+  return found;
+}
+
+async function fetchBazosDailyCandidates(existingKeys) {
+  const cutoffDate = cutoffCalendarDate(BAZOS_DAILY_LOOKBACK_DAYS);
+  const categoryResults = await mapConcurrent(
+    BAZOS_DAILY_CATEGORIES,
+    BAZOS_DAILY_CONCURRENCY,
+    (category) => fetchBazosDailyCategory(category, cutoffDate),
+  );
+  const seen = new Set();
+  const candidates = categoryResults.flat().filter((candidate) => {
+    if (existingKeys.has(candidate.key) || seen.has(candidate.key)) return false;
+    seen.add(candidate.key);
+    return true;
+  });
+  console.log(
+    `Bazos existing_ids=${existingKeys.size} recent_listings=${categoryResults.flat().length} `
+    + `new_candidates=${candidates.length}`,
+  );
+  return candidates;
+}
+
+async function scrapeNewBazosRows(db, existingKeys) {
+  const taxonomy = loadBazosTaxonomy(db);
+  const candidates = await fetchBazosDailyCandidates(existingKeys);
+  if (!BAZOS_FETCH_DETAILS) {
+    return { rows: [], candidates: candidates.length, rejected: 0, detailsSkipped: true };
+  }
+  const rows = [];
+  let cursor = 0;
+  let done = 0;
+  let rejected = 0;
+
+  async function worker() {
+    while (cursor < candidates.length) {
+      const index = cursor;
+      cursor += 1;
+      const candidate = candidates[index];
+      const row = parseBazosDetail(await fetchText(candidate.url), candidate, taxonomy);
+      if (row) rows.push(row);
+      else rejected += 1;
+      done += 1;
+      if (done % 50 === 0 || done === candidates.length) {
+        console.log(`Bazos details ${done}/${candidates.length} accepted=${rows.length}`);
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(BAZOS_DETAIL_CONCURRENCY, candidates.length) }, () => worker()),
+  );
+  return { rows, candidates: candidates.length, rejected, detailsSkipped: false };
+}
+
+async function fetchBazosLiveSite(host, label) {
+  const [indexXml, homepageHtml] = await Promise.all([
+    fetchText(`https://${host}/sitemap.php`),
+    fetchText(`https://${host}/`),
+  ]);
+  const sitemapUrls = parseBazosSitemapIndex(indexXml, host);
+  if (!sitemapUrls.length) throw new Error(`Bazos sitemap index is empty for ${host}`);
+  const sitemapDocuments = await mapConcurrent(
+    sitemapUrls,
+    BAZOS_SITEMAP_CONCURRENCY,
+    (url) => fetchText(url),
+  );
+  const keys = new Set();
+  for (const xml of sitemapDocuments) {
+    for (const listing of parseBazosSitemapDetail(xml, host)) keys.add(listing.key);
+  }
+  const expectedTotal = parseBazosSiteTotal(homepageHtml, label);
+  if (!expectedTotal || !hasSafeBazosCoverage(keys.size, expectedTotal)) {
+    throw new Error(
+      `Unsafe Bazos sitemap coverage for ${host}: ${keys.size}/${expectedTotal ?? "unknown"}`,
+    );
+  }
+  console.log(
+    `Bazos active index host=${host} unique=${keys.size} expected=${expectedTotal} `
+    + `sitemaps=${sitemapUrls.length}`,
+  );
+  return { keys, expectedTotal, sitemapCount: sitemapUrls.length };
+}
+
+async function fetchLiveBazosKeys() {
+  const sites = await Promise.all([
+    fetchBazosLiveSite("auto.bazos.cz", "Auto"),
+    fetchBazosLiveSite("motorky.bazos.cz", "Motorky"),
+  ]);
+  return {
+    keys: new Set(sites.flatMap((site) => [...site.keys])),
+    summary: {
+      auto: {
+        unique_ids: sites[0].keys.size,
+        expected_total: sites[0].expectedTotal,
+        sitemaps: sites[0].sitemapCount,
+      },
+      motorky: {
+        unique_ids: sites[1].keys.size,
+        expected_total: sites[1].expectedTotal,
+        sitemaps: sites[1].sitemapCount,
+      },
+      total_unique_ids: sites[0].keys.size + sites[1].keys.size,
+    },
+  };
+}
+
 async function scrapeNewRows(existingUrls) {
   const items = await fetchList();
   const seen = new Set();
@@ -668,7 +926,9 @@ function commitAndPush(repoDir) {
 async function main() {
   const startedAt = new Date().toISOString();
   const repoDir = prepareRepo();
-  const dbPath = path.join(repoDir, "data", "vehicles_ai.db");
+  const dbPath = process.env.CLOUD_UPDATE_DB_PATH
+    ? path.resolve(process.env.CLOUD_UPDATE_DB_PATH)
+    : path.join(repoDir, "data", "vehicles_ai.db");
 
   ensureVehicleDatabaseSync(dbPath);
 
@@ -683,9 +943,17 @@ async function main() {
   }
 
   const beforeCount = db.prepare(`SELECT COUNT(*) AS count FROM ${TABLE}`).get().count;
-  const existingUrls = loadExistingUrls(db);
-  const rows = await scrapeNewRows(existingUrls);
-  const liveIndex = RECONCILE_ENABLED ? await fetchLiveSautoIds() : null;
+  const existingUrls = SAUTO_ENABLED ? loadExistingUrls(db) : new Set();
+  const sautoRows = SAUTO_ENABLED ? await scrapeNewRows(existingUrls) : [];
+  const liveIndex = SAUTO_ENABLED && RECONCILE_ENABLED ? await fetchLiveSautoIds() : null;
+  const existingBazosKeys = BAZOS_ENABLED ? loadExistingBazosKeys(db) : new Set();
+  const bazosScrape = BAZOS_ENABLED
+    ? await scrapeNewBazosRows(db, existingBazosKeys)
+    : { rows: [], candidates: 0, rejected: 0, detailsSkipped: false };
+  const bazosLiveIndex = BAZOS_ENABLED && BAZOS_RECONCILE_ENABLED
+    ? await fetchLiveBazosKeys()
+    : null;
+  const rows = [...sautoRows, ...bazosScrape.rows];
   const insertedRows = DRY_RUN ? 0 : insertRows(db, rows);
   let lifecycle = null;
   if (liveIndex) {
@@ -697,6 +965,22 @@ async function main() {
       };
     } else {
       lifecycle = reconcileSautoLifecycle(db, liveIndex.ids, {
+        table: TABLE,
+        missingChecksBeforeInactive: MISSING_CHECKS_BEFORE_INACTIVE,
+        dryRun: DRY_RUN,
+      });
+    }
+  }
+  let bazosLifecycle = null;
+  if (bazosLiveIndex) {
+    if (DRY_RUN && !hasSautoLifecycleSchema(db, TABLE)) {
+      bazosLifecycle = {
+        skipped: true,
+        reason: "dry_run_database_has_no_lifecycle_columns_yet",
+        would_initialize_schema: true,
+      };
+    } else {
+      bazosLifecycle = reconcileBazosLifecycle(db, bazosLiveIndex.keys, {
         table: TABLE,
         missingChecksBeforeInactive: MISSING_CHECKS_BEFORE_INACTIVE,
         dryRun: DRY_RUN,
@@ -730,9 +1014,14 @@ async function main() {
     after_count: afterCount,
     scraped_new_rows: rows.length,
     scraped_new_rows_by_source: scrapedNewRowsBySource,
+    bazos_candidates: bazosScrape.candidates,
+    bazos_rejected: bazosScrape.rejected,
+    bazos_details_skipped: bazosScrape.detailsSkipped,
     inserted_rows: insertedRows,
     active_index: liveIndex?.summary ?? null,
     lifecycle,
+    bazos_active_index: bazosLiveIndex?.summary ?? null,
+    bazos_lifecycle: bazosLifecycle,
     pushed: gitResult.pushed,
     commit: gitResult.commit,
     result: gitResult.reason,
