@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 import {
   buildSautoListingUrl,
   ensureSautoLifecycleSchema,
+  hasSafeSautoCoverage,
   hasSautoLifecycleSchema,
   reconcileSautoLifecycle,
   sautoDailySourceDb,
@@ -434,7 +435,7 @@ async function fetchReconcileBucket(bucket) {
       }
       offset += RECONCILE_PAGE_LIMIT;
     }
-    if (ids.size >= liveTotal) break;
+    if (hasSafeSautoCoverage(ids.size, liveTotal)) break;
     console.log(
       `active index recheck category=${SAUTO_CATEGORIES.get(bucket.categoryId)} `
       + `price=${bucket.priceFrom}-${bucket.priceTo} pass=${pass} `
@@ -442,7 +443,7 @@ async function fetchReconcileBucket(bucket) {
     );
   }
 
-  if (ids.size < liveTotal) {
+  if (!hasSafeSautoCoverage(ids.size, liveTotal)) {
     throw new Error(
       `Incomplete Sauto active-index bucket for category ${bucket.categoryId}: `
       + `${ids.size}/${liveTotal} unique IDs`,
@@ -471,12 +472,6 @@ async function mapConcurrent(items, concurrency, operation) {
   return results;
 }
 
-function hasSafeCoverage(actual, expected) {
-  if (expected <= 0) return actual === 0;
-  const allowedGap = Math.max(10, Math.ceil(expected * 0.001));
-  return actual >= expected - allowedGap;
-}
-
 async function fetchLiveSautoIds() {
   const baseTotals = {};
   const buckets = [];
@@ -484,7 +479,7 @@ async function fetchLiveSautoIds() {
     const baseTotal = await searchTotal(categoryId);
     const categoryBuckets = await planReconcileBuckets(categoryId);
     const plannedTotal = categoryBuckets.reduce((sum, bucket) => sum + bucket.plannedTotal, 0);
-    if (!hasSafeCoverage(plannedTotal, baseTotal)) {
+    if (!hasSafeSautoCoverage(plannedTotal, baseTotal)) {
       throw new Error(
         `Unsafe Sauto active-index plan for ${categoryName}: ${plannedTotal}/${baseTotal}`,
       );
@@ -514,7 +509,7 @@ async function fetchLiveSautoIds() {
       }
     }
     const baseTotal = baseTotals[categoryName];
-    if (!hasSafeCoverage(categoryIds.size, baseTotal)) {
+    if (!hasSafeSautoCoverage(categoryIds.size, baseTotal)) {
       throw new Error(
         `Unsafe Sauto active-index coverage for ${categoryName}: `
         + `${categoryIds.size}/${baseTotal}`,

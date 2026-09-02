@@ -37,6 +37,12 @@ export function parseSautoListingId(value) {
   return match ? Number(match[1]) : null;
 }
 
+export function hasSafeSautoCoverage(actual, expected) {
+  if (expected <= 0) return actual === 0;
+  const allowedGap = Math.max(10, Math.ceil(expected * 0.001));
+  return actual >= expected - allowedGap;
+}
+
 export function hasSautoLifecycleSchema(db, table = DEFAULT_TABLE) {
   const columns = new Set(
     db.prepare(`PRAGMA table_info(${JSON.stringify(table)})`).all().map((row) => row.name),

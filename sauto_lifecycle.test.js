@@ -4,11 +4,19 @@ import Database from "better-sqlite3";
 import {
   buildSautoListingUrl,
   ensureSautoLifecycleSchema,
+  hasSafeSautoCoverage,
   hasSautoLifecycleSchema,
   parseSautoListingId,
   reconcileSautoLifecycle,
   sautoDailySourceDb,
 } from "./sauto_lifecycle.js";
+
+test("Sauto coverage accepts tiny duplicate drift but rejects incomplete scans", () => {
+  assert.equal(hasSafeSautoCoverage(6676, 6677), true);
+  assert.equal(hasSafeSautoCoverage(6666, 6677), false);
+  assert.equal(hasSafeSautoCoverage(99_900, 100_000), true);
+  assert.equal(hasSafeSautoCoverage(99_899, 100_000), false);
+});
 
 test("daily Sauto URLs and source names follow the vehicle category", () => {
   const baseItem = {
