@@ -212,7 +212,7 @@ function normalizeRequest(input = {}) {
   };
 }
 
-function buildWhere(request, attempt) {
+function buildWhere(request, attempt, supportsActiveFlag = false) {
   const where = [
     "price IS NOT NULL",
     "TRIM(price) <> ''",
@@ -223,6 +223,10 @@ function buildWhere(request, attempt) {
     ))`,
   ];
   const params = {};
+
+  if (supportsActiveFlag) {
+    where.push("COALESCE(CAST(is_active AS INTEGER), 1) <> 0");
+  }
 
   if (request.brandNorm) {
     where.push("(brand_norm = @brandNorm OR lower(brand) = @brandNorm)");
@@ -291,6 +295,10 @@ export function initVehicleDb(dbPath) {
   if (!table) {
     throw new Error(`V databazi ${resolvedPath} nebyla nalezena tabulka s vozidly.`);
   }
+  const columns = new Set(
+    db.prepare(`PRAGMA table_info(${JSON.stringify(table)})`).all().map((row) => row.name),
+  );
+  const supportsActiveFlag = columns.has("is_active");
 
   function fetchCandidates(input, limit = 5000) {
     const request = normalizeRequest(input);
@@ -306,7 +314,7 @@ export function initVehicleDb(dbPath) {
     let usedAttempt = attempts[attempts.length - 1];
 
     for (const attempt of attempts) {
-      const { where, params } = buildWhere(request, attempt);
+      const { where, params } = buildWhere(request, attempt, supportsActiveFlag);
       const rows = db
         .prepare(
           `
@@ -396,14 +404,33 @@ export function initVehicleDb(dbPath) {
   }
 
   function health() {
-    const count = db.prepare(`select count(*) as count from ${JSON.stringify(table)}`).get();
+    const count = supportsActiveFlag
+      ? db.prepare(
+        `SELECT COUNT(*) AS count,
+                SUM(CASE WHEN COALESCE(CAST(is_active AS INTEGER), 1) <> 0 THEN 1 ELSE 0 END)
+                  AS active_count,
+                SUM(CASE WHEN COALESCE(CAST(is_active AS INTEGER), 1) = 0 THEN 1 ELSE 0 END)
+                  AS inactive_count
+           FROM ${JSON.stringify(table)}`,
+      ).get()
+      : db.prepare(`SELECT COUNT(*) AS count FROM ${JSON.stringify(table)}`).get();
     return {
       ok: true,
       path: resolvedPath,
       table,
       count: count.count,
+      active_count: supportsActiveFlag ? count.active_count : count.count,
+      inactive_count: supportsActiveFlag ? count.inactive_count : 0,
+      active_filter: supportsActiveFlag,
     };
   }
 
-  return { estimatePrice, findComps, health };
+  return {
+    estimatePrice,
+    findComps,
+    health,
+    close() {
+      db.close();
+    },
+  };
 }

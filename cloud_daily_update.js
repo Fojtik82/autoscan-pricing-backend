@@ -4,6 +4,13 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
+import {
+  buildSautoListingUrl,
+  ensureSautoLifecycleSchema,
+  hasSautoLifecycleSchema,
+  reconcileSautoLifecycle,
+  sautoDailySourceDb,
+} from "./sauto_lifecycle.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const BASE = "https://www.sauto.cz";
@@ -15,6 +22,31 @@ const DRY_RUN = options.has("--dry-run") || process.env.DRY_RUN === "1";
 const LIMIT = Number(process.env.SAUTO_LIMIT || 200);
 const MAX_PAGES = Number(process.env.SAUTO_MAX_PAGES || 80);
 const DETAIL_CONCURRENCY = Number(process.env.SAUTO_DETAIL_CONCURRENCY || 8);
+const RECONCILE_ENABLED = process.env.SAUTO_RECONCILE_ENABLED !== "0";
+const RECONCILE_CONCURRENCY = Math.max(
+  1,
+  Math.min(8, Number(process.env.SAUTO_RECONCILE_CONCURRENCY || 4)),
+);
+const RECONCILE_PAGE_LIMIT = Math.max(
+  100,
+  Math.min(1000, Number(process.env.SAUTO_RECONCILE_PAGE_LIMIT || 1000)),
+);
+const RECONCILE_BUCKET_LIMIT = Math.max(
+  1000,
+  Math.min(9000, Number(process.env.SAUTO_RECONCILE_BUCKET_LIMIT || 8000)),
+);
+const MISSING_CHECKS_BEFORE_INACTIVE = Math.max(
+  1,
+  Number(process.env.SAUTO_MISSING_CHECKS_BEFORE_INACTIVE || 3),
+);
+const MAX_RECONCILE_PRICE = 1_000_000_000;
+const SAUTO_CATEGORIES = new Map([
+  [838, "osobni"],
+  [839, "uzitkova"],
+  [841, "motorky"],
+  [842, "ctyrkolky"],
+]);
+const DAILY_INGEST_CATEGORY_IDS = [838, 839, 841];
 
 const GITHUB_REPO = process.env.GITHUB_REPO || "Fojtik82/autoscan-pricing-backend";
 const GITHUB_BRANCH = process.env.GITHUB_BRANCH || "main";
@@ -51,6 +83,11 @@ const insertColumns = [
   "engine_ccm",
   "engine_l",
   "trim_norm",
+  "is_active",
+  "last_seen_at",
+  "missing_since",
+  "missing_checks",
+  "inactive_at",
 ];
 
 function maskToken(text) {
@@ -152,13 +189,6 @@ function mapDriveNorm(value) {
   return normalize(value) || null;
 }
 
-function sourceUrl(item) {
-  const brand = item.manufacturer_cb?.seo_name;
-  const model = item.model_cb?.seo_name;
-  if (!brand || !model || !item.id) return null;
-  return `${BASE}/osobni/detail/${brand}/${model}/${item.id}`;
-}
-
 function buildMotor(detail) {
   const parts = [];
   if (detail.additional_model_name) parts.push(detail.additional_model_name);
@@ -206,7 +236,8 @@ function toRow(detail) {
   const fuel = detail.fuel_cb?.name ?? null;
   const transmission = detail.gearbox_cb?.name ?? null;
   const motor = buildMotor(detail);
-  const url = sourceUrl(detail);
+  const url = buildSautoListingUrl(detail);
+  const scrapedAt = new Date().toISOString();
 
   return {
     brand,
@@ -222,7 +253,7 @@ function toRow(detail) {
     kw: asText(detail.engine_power),
     body: detail.vehicle_body_cb?.name ?? null,
     source_url: url,
-    source_db: "sauto_1den_cloud",
+    source_db: sautoDailySourceDb(detail),
     title:
       detail.name ??
       [brand, model, detail.additional_model_name].filter(Boolean).join(" "),
@@ -235,54 +266,90 @@ function toRow(detail) {
     engine_ccm: asText(detail.engine_volume),
     engine_l: engineLiters(detail.engine_volume),
     trim_norm: extractTrim(detail),
+    is_active: 1,
+    last_seen_at: scrapedAt,
+    missing_since: null,
+    missing_checks: 0,
+    inactive_at: null,
   };
 }
 
 async function fetchJson(url, attempt = 1) {
-  const response = await fetch(url, {
-    headers: {
-      accept: "application/json",
-      "accept-language": "cs",
-      "user-agent": "Mozilla/5.0 CarPrice cloud daily updater",
-    },
-  });
+  try {
+    const response = await fetch(url, {
+      headers: {
+        accept: "application/json",
+        "accept-language": "cs",
+        "user-agent": "Mozilla/5.0 CarPrice cloud daily updater",
+      },
+      signal: AbortSignal.timeout(30_000),
+    });
 
-  if (!response.ok) {
-    if (attempt < 3 && [429, 500, 502, 503, 504].includes(response.status)) {
+    if (!response.ok) {
+      if (attempt < 5 && [429, 500, 502, 503, 504].includes(response.status)) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
+        return fetchJson(url, attempt + 1);
+      }
+      throw new Error(`${response.status} ${response.statusText}: ${url}`);
+    }
+
+    return await response.json();
+  } catch (error) {
+    if (attempt < 5 && !/^4\d\d /.test(String(error.message || error))) {
       await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
       return fetchJson(url, attempt + 1);
     }
-    throw new Error(`${response.status} ${response.statusText}: ${url}`);
+    throw error;
   }
-
-  return response.json();
 }
 
-function listUrl(offset) {
+function searchUrl({
+  categoryId,
+  limit,
+  offset = 0,
+  itemAgeSeo,
+  priceFrom,
+  priceTo,
+}) {
   const params = new URLSearchParams({
-    limit: String(LIMIT),
+    limit: String(limit),
     offset: String(offset),
-    item_age_seo: "1-den",
     condition_seo: "nove,ojete,predvadeci",
-    category_id: "838",
+    category_id: String(categoryId),
     operating_lease: "false",
   });
+  if (itemAgeSeo) params.set("item_age_seo", itemAgeSeo);
+  if (priceFrom !== undefined) params.set("price_from", String(priceFrom));
+  if (priceTo !== undefined) params.set("price_to", String(priceTo));
   return `${BASE}/api/v1/items/search?${params.toString()}`;
 }
 
-async function fetchList() {
+function listUrl(categoryId, offset) {
+  return searchUrl({
+    categoryId,
+    limit: LIMIT,
+    offset,
+    itemAgeSeo: "1-den",
+  });
+}
+
+async function fetchCategoryList(categoryId) {
   const all = [];
   let total = null;
   let pages = 0;
+  const categoryName = SAUTO_CATEGORIES.get(categoryId) || String(categoryId);
 
   for (let offset = 0; total === null || offset < total; offset += LIMIT) {
     if (pages >= MAX_PAGES) break;
     let data;
     try {
-      data = await fetchJson(listUrl(offset));
+      data = await fetchJson(listUrl(categoryId, offset));
     } catch (error) {
       if (String(error.message).startsWith("422 ") && offset >= 10000) {
-        console.log(`list stopped at offset ${offset}; Sauto API refuses deeper paging`);
+        console.log(
+          `daily list category=${categoryName} stopped at offset ${offset}; `
+          + "Sauto API refuses deeper paging",
+        );
         break;
       }
       throw error;
@@ -291,10 +358,180 @@ async function fetchList() {
     total = data.pagination?.total ?? data.results?.length ?? 0;
     all.push(...(data.results ?? []));
     pages += 1;
-    console.log(`list ${Math.min(offset + LIMIT, total)}/${total}`);
+    console.log(
+      `daily list category=${categoryName} ${Math.min(offset + LIMIT, total)}/${total}`,
+    );
   }
 
   return all;
+}
+
+async function fetchList() {
+  const categoryLists = await Promise.all(
+    DAILY_INGEST_CATEGORY_IDS.map((categoryId) => fetchCategoryList(categoryId)),
+  );
+  return categoryLists.flat();
+}
+
+async function searchTotal(categoryId, priceFrom, priceTo) {
+  const data = await fetchJson(searchUrl({
+    categoryId,
+    limit: 1,
+    priceFrom,
+    priceTo,
+  }));
+  if (data.warnings && Object.keys(data.warnings).length) {
+    throw new Error(`Sauto rejected active-index filters: ${JSON.stringify(data.warnings)}`);
+  }
+  return Number(data.pagination?.total || 0);
+}
+
+async function planReconcileBuckets(
+  categoryId,
+  priceFrom = 0,
+  priceTo = MAX_RECONCILE_PRICE,
+) {
+  const total = await searchTotal(categoryId, priceFrom, priceTo);
+  if (total <= RECONCILE_BUCKET_LIMIT) {
+    return [{ categoryId, priceFrom, priceTo, plannedTotal: total }];
+  }
+  if (priceFrom >= priceTo) {
+    throw new Error(
+      `Cannot split Sauto category ${categoryId}; ${total} items share price ${priceFrom}`,
+    );
+  }
+  const middle = Math.floor((priceFrom + priceTo) / 2);
+  return [
+    ...await planReconcileBuckets(categoryId, priceFrom, middle),
+    ...await planReconcileBuckets(categoryId, middle + 1, priceTo),
+  ];
+}
+
+async function fetchReconcileBucket(bucket) {
+  const ids = new Set();
+  let liveTotal = bucket.plannedTotal;
+
+  for (let pass = 1; pass <= 3; pass += 1) {
+    let offset = 0;
+    let passTotal = liveTotal;
+    while (offset < passTotal) {
+      const data = await fetchJson(searchUrl({
+        categoryId: bucket.categoryId,
+        limit: RECONCILE_PAGE_LIMIT,
+        offset,
+        priceFrom: bucket.priceFrom,
+        priceTo: bucket.priceTo,
+      }));
+      if (data.warnings && Object.keys(data.warnings).length) {
+        throw new Error(`Sauto rejected active-index filters: ${JSON.stringify(data.warnings)}`);
+      }
+      passTotal = Number(data.pagination?.total || 0);
+      liveTotal = passTotal;
+      const results = data.results || [];
+      if (!results.length) break;
+      for (const item of results) {
+        if (item.id) ids.add(Number(item.id));
+      }
+      offset += RECONCILE_PAGE_LIMIT;
+    }
+    if (ids.size >= liveTotal) break;
+    console.log(
+      `active index recheck category=${SAUTO_CATEGORIES.get(bucket.categoryId)} `
+      + `price=${bucket.priceFrom}-${bucket.priceTo} pass=${pass} `
+      + `unique=${ids.size} total=${liveTotal}`,
+    );
+  }
+
+  if (ids.size < liveTotal) {
+    throw new Error(
+      `Incomplete Sauto active-index bucket for category ${bucket.categoryId}: `
+      + `${ids.size}/${liveTotal} unique IDs`,
+    );
+  }
+  console.log(
+    `active index category=${SAUTO_CATEGORIES.get(bucket.categoryId)} `
+    + `price=${bucket.priceFrom}-${bucket.priceTo} unique=${ids.size}`,
+  );
+  return { ...bucket, liveTotal, ids };
+}
+
+async function mapConcurrent(items, concurrency, operation) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await operation(items[index]);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker()),
+  );
+  return results;
+}
+
+function hasSafeCoverage(actual, expected) {
+  if (expected <= 0) return actual === 0;
+  const allowedGap = Math.max(10, Math.ceil(expected * 0.001));
+  return actual >= expected - allowedGap;
+}
+
+async function fetchLiveSautoIds() {
+  const baseTotals = {};
+  const buckets = [];
+  for (const [categoryId, categoryName] of SAUTO_CATEGORIES) {
+    const baseTotal = await searchTotal(categoryId);
+    const categoryBuckets = await planReconcileBuckets(categoryId);
+    const plannedTotal = categoryBuckets.reduce((sum, bucket) => sum + bucket.plannedTotal, 0);
+    if (!hasSafeCoverage(plannedTotal, baseTotal)) {
+      throw new Error(
+        `Unsafe Sauto active-index plan for ${categoryName}: ${plannedTotal}/${baseTotal}`,
+      );
+    }
+    baseTotals[categoryName] = baseTotal;
+    buckets.push(...categoryBuckets);
+    console.log(
+      `active index planned category=${categoryName} total=${baseTotal} `
+      + `buckets=${categoryBuckets.length}`,
+    );
+  }
+
+  const fetched = await mapConcurrent(
+    buckets,
+    RECONCILE_CONCURRENCY,
+    fetchReconcileBucket,
+  );
+  const ids = new Set();
+  const uniqueByCategory = {};
+  for (const [categoryId, categoryName] of SAUTO_CATEGORIES) {
+    const categoryIds = new Set();
+    for (const bucket of fetched) {
+      if (bucket.categoryId !== categoryId) continue;
+      for (const id of bucket.ids) {
+        ids.add(id);
+        categoryIds.add(id);
+      }
+    }
+    const baseTotal = baseTotals[categoryName];
+    if (!hasSafeCoverage(categoryIds.size, baseTotal)) {
+      throw new Error(
+        `Unsafe Sauto active-index coverage for ${categoryName}: `
+        + `${categoryIds.size}/${baseTotal}`,
+      );
+    }
+    uniqueByCategory[categoryName] = categoryIds.size;
+  }
+
+  return {
+    ids,
+    summary: {
+      base_totals: baseTotals,
+      unique_ids: uniqueByCategory,
+      total_unique_ids: ids.size,
+      buckets: buckets.length,
+    },
+  };
 }
 
 async function fetchDetail(id) {
@@ -346,7 +583,7 @@ async function scrapeNewRows(existingUrls) {
   const items = await fetchList();
   const seen = new Set();
   const candidates = items
-    .map((item) => ({ item, url: sourceUrl(item) }))
+    .map((item) => ({ item, url: buildSautoListingUrl(item) }))
     .filter(({ url }) => url && !existingUrls.has(url) && !seen.has(url) && seen.add(url));
 
   console.log(`existing_urls=${existingUrls.size}`);
@@ -439,14 +676,37 @@ async function main() {
   const db = new Database(dbPath, DRY_RUN ? { readonly: true } : {});
   if (!DRY_RUN) {
     db.pragma("journal_mode = DELETE");
+    ensureSautoLifecycleSchema(db, TABLE);
   }
 
   const beforeCount = db.prepare(`SELECT COUNT(*) AS count FROM ${TABLE}`).get().count;
   const existingUrls = loadExistingUrls(db);
   const rows = await scrapeNewRows(existingUrls);
+  const liveIndex = RECONCILE_ENABLED ? await fetchLiveSautoIds() : null;
   const insertedRows = DRY_RUN ? 0 : insertRows(db, rows);
+  let lifecycle = null;
+  if (liveIndex) {
+    if (DRY_RUN && !hasSautoLifecycleSchema(db, TABLE)) {
+      lifecycle = {
+        skipped: true,
+        reason: "dry_run_database_has_no_lifecycle_columns_yet",
+        would_initialize_schema: true,
+      };
+    } else {
+      lifecycle = reconcileSautoLifecycle(db, liveIndex.ids, {
+        table: TABLE,
+        missingChecksBeforeInactive: MISSING_CHECKS_BEFORE_INACTIVE,
+        dryRun: DRY_RUN,
+      });
+    }
+  }
   const afterCount = db.prepare(`SELECT COUNT(*) AS count FROM ${TABLE}`).get().count;
   db.close();
+
+  const scrapedNewRowsBySource = {};
+  for (const row of rows) {
+    scrapedNewRowsBySource[row.source_db] = (scrapedNewRowsBySource[row.source_db] || 0) + 1;
+  }
 
   const gitResult = commitAndPush(repoDir);
 
@@ -461,7 +721,10 @@ async function main() {
     before_count: beforeCount,
     after_count: afterCount,
     scraped_new_rows: rows.length,
+    scraped_new_rows_by_source: scrapedNewRowsBySource,
     inserted_rows: insertedRows,
+    active_index: liveIndex?.summary ?? null,
+    lifecycle,
     pushed: gitResult.pushed,
     commit: gitResult.commit,
     result: gitResult.reason,
