@@ -6,6 +6,7 @@ import { initVehicleDb } from "./price_db.js";
 import { initSearchLogsDb } from "./search_logs.js";
 import { initVehicleIngestDb, isAuthorizedIngestRequest } from "./vehicle_ingest.js";
 import { normalizeVin, validateVin } from "./vin.js";
+import { ensureVehicleDatabaseSync } from "./vehicle_db_archive.js";
 
 const PORT = Number(process.env.PORT || 3000);
 const SQLITE_PATH = process.env.SQLITE_PATH || "./vin_cache.db";
@@ -36,6 +37,7 @@ let vehicleDb = null;
 let vehicleIngestDb = null;
 
 try {
+  ensureVehicleDatabaseSync(VEHICLES_DB_PATH);
   vehicleDb = initVehicleDb(VEHICLES_DB_PATH);
   if (VEHICLE_INGEST_API_KEY) vehicleIngestDb = initVehicleIngestDb(VEHICLES_DB_PATH);
   console.log("Vehicle price DB loaded", vehicleDb.health());

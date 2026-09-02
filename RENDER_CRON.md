@@ -1,6 +1,6 @@
 # Render cron update for CarPrice
 
-This repository can update `data/vehicles_ai.db` directly from Render, so the
+This repository can update `data/vehicles_ai.db.gz` directly from Render, so the
 local Windows computer does not need to be online.
 
 ## Render Cron Job
@@ -42,7 +42,7 @@ Do not put it into the repository.
 ## What it does
 
 1. Clones the current backend repository to a temporary folder.
-2. Opens `data/vehicles_ai.db`.
+2. Restores `data/vehicles_ai.db` from the tracked gzip archive and opens it.
 3. Scrapes Sauto listings from the last day for passenger cars, utility
    vehicles/vans, and motorcycles. Each category keeps its correct Sauto URL
    path and source name in the database.
@@ -55,8 +55,9 @@ Do not put it into the repository.
    `inactive_at`.
 7. Marks a listing inactive only after it is absent from three consecutive
    successful daily checks. A listing that appears again is reactivated.
-8. Commits and pushes the updated DB back to `main`.
-9. The existing Render web service auto-deploys the new commit. Price estimates
+8. Compresses the updated DB and commits `data/vehicles_ai.db.gz` back to `main`.
+9. The existing Render web service restores the DB archive during startup and
+   auto-deploys the new commit. Price estimates
    and comparable listings automatically exclude rows with `is_active = 0`.
 
 If the complete live-index scan fails or its coverage is suspiciously low, the

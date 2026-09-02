@@ -12,6 +12,11 @@ import {
   reconcileSautoLifecycle,
   sautoDailySourceDb,
 } from "./sauto_lifecycle.js";
+import {
+  compressVehicleDatabase,
+  ensureVehicleDatabaseSync,
+  vehicleDatabaseArchivePath,
+} from "./vehicle_db_archive.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const BASE = "https://www.sauto.cz";
@@ -638,7 +643,8 @@ function commitAndPush(repoDir) {
   run("git", ["config", "user.name", GIT_AUTHOR_NAME], { cwd: repoDir });
   run("git", ["config", "user.email", GIT_AUTHOR_EMAIL], { cwd: repoDir });
 
-  const status = run("git", ["status", "--porcelain", "--", "data/vehicles_ai.db"], {
+  const archiveRelativePath = "data/vehicles_ai.db.gz";
+  const status = run("git", ["status", "--porcelain", "--", archiveRelativePath], {
     cwd: repoDir,
   }).stdout.trim();
 
@@ -650,7 +656,7 @@ function commitAndPush(repoDir) {
     return { pushed: false, commit: null, reason: "dry_run" };
   }
 
-  run("git", ["add", "data/vehicles_ai.db"], { cwd: repoDir });
+  run("git", ["add", archiveRelativePath], { cwd: repoDir });
   const message = `Cloud update vehicles_ai.db ${new Date().toISOString().slice(0, 16)}`;
   run("git", ["commit", "-m", message], { cwd: repoDir });
   const commit = run("git", ["rev-parse", "--short", "HEAD"], { cwd: repoDir }).stdout.trim();
@@ -663,6 +669,8 @@ async function main() {
   const startedAt = new Date().toISOString();
   const repoDir = prepareRepo();
   const dbPath = path.join(repoDir, "data", "vehicles_ai.db");
+
+  ensureVehicleDatabaseSync(dbPath);
 
   if (!fs.existsSync(dbPath)) {
     throw new Error(`Database not found: ${dbPath}`);
@@ -698,6 +706,10 @@ async function main() {
   const afterCount = db.prepare(`SELECT COUNT(*) AS count FROM ${TABLE}`).get().count;
   db.close();
 
+  const dbArchivePath = DRY_RUN
+    ? vehicleDatabaseArchivePath(dbPath)
+    : await compressVehicleDatabase(dbPath);
+
   const scrapedNewRowsBySource = {};
   for (const row of rows) {
     scrapedNewRowsBySource[row.source_db] = (scrapedNewRowsBySource[row.source_db] || 0) + 1;
@@ -713,6 +725,7 @@ async function main() {
     repo: GITHUB_REPO,
     branch: GITHUB_BRANCH,
     db_path: dbPath,
+    db_archive_path: dbArchivePath,
     before_count: beforeCount,
     after_count: afterCount,
     scraped_new_rows: rows.length,
