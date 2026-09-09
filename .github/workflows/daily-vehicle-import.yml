@@ -1,0 +1,77 @@
+name: CarPrice daily vehicle import
+
+on:
+  schedule:
+    # 08:30 UTC: 10:30 Prague in summer, 09:30 in winter.
+    - cron: '30 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: carprice-vehicle-database-main
+  cancel-in-progress: false
+
+jobs:
+  update:
+    # Do not run in forks or silently use paid private-repository minutes.
+    if: github.repository == 'Fojtik82/autoscan-pricing-backend' && github.ref == 'refs/heads/main' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    permissions:
+      contents: write
+
+    steps:
+      - name: Read backend source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Use the backend Node version
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+          package-manager-cache: false
+
+      - name: Install existing importer dependencies
+        run: npm install --no-audit --no-fund --package-lock=false
+
+      - name: Import Sauto and Bazos and publish the database
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPO: Fojtik82/autoscan-pricing-backend
+          GITHUB_BRANCH: main
+          WORK_REPO_DIR: ${{ runner.temp }}/carprice-database-update
+          GIT_AUTHOR_NAME: CarPrice DB Bot
+          GIT_AUTHOR_EMAIL: carprice-db-bot@users.noreply.github.com
+          SAUTO_ENABLED: '1'
+          SAUTO_LIMIT: '200'
+          SAUTO_MAX_PAGES: '80'
+          SAUTO_DETAIL_CONCURRENCY: '4'
+          SAUTO_RECONCILE_ENABLED: '1'
+          SAUTO_RECONCILE_CONCURRENCY: '4'
+          SAUTO_RECONCILE_PAGE_LIMIT: '1000'
+          SAUTO_RECONCILE_BUCKET_LIMIT: '8000'
+          SAUTO_MISSING_CHECKS_BEFORE_INACTIVE: '3'
+          BAZOS_ENABLED: '1'
+          BAZOS_RECONCILE_ENABLED: '1'
+          BAZOS_DAILY_LOOKBACK_DAYS: '2'
+          BAZOS_MAX_DAILY_PAGES_PER_CATEGORY: '2000'
+          BAZOS_MIN_DAILY_PAGES_PER_CATEGORY: '3'
+          BAZOS_DAILY_CONCURRENCY: '2'
+          BAZOS_DETAIL_CONCURRENCY: '3'
+          BAZOS_SITEMAP_CONCURRENCY: '3'
+          BAZOS_REQUEST_DELAY_MS: '250'
+          BAZOS_FETCH_DETAILS: '1'
+        run: npm run cloud:update
+
+      - name: Record completion status
+        if: always()
+        env:
+          IMPORT_STATUS: ${{ job.status }}
+        run: |
+          printf '## CarPrice daily import\n\nStatus: %s\n' "$IMPORT_STATUS" >> "$GITHUB_STEP_SUMMARY"
+          printf '\nSee the import step for actual source coverage, row counts and publication result.\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '\nThis workflow does not install a phone build or activate a mobile snapshot endpoint.\n' >> "$GITHUB_STEP_SUMMARY"
