@@ -1,4 +1,5 @@
 import path from "node:path";
+import { countMarketSources } from "./source_identity.js";
 import Database from "better-sqlite3";
 
 const TABLE_CANDIDATES = [
@@ -67,7 +68,7 @@ function parseYear(value) {
     return null;
   }
   const year = Math.round(numeric);
-  return year >= 1980 && year <= 2035 ? year : null;
+  return year >= 1886 && year <= new Date().getUTCFullYear() + 1 ? year : null;
 }
 
 function normalizeFuel(value) {
@@ -212,7 +213,7 @@ function normalizeRequest(input = {}) {
   };
 }
 
-function buildWhere(request, attempt, supportsActiveFlag = false) {
+function buildWhere(request, attempt, supportsActiveFlag = false, supportsFreshness = false) {
   const where = [
     "price IS NOT NULL",
     "TRIM(price) <> ''",
@@ -223,6 +224,15 @@ function buildWhere(request, attempt, supportsActiveFlag = false) {
     ))`,
   ];
   const params = {};
+  const niche = "(lower(coalesce(source_db,'')) LIKE '%sportovnivozy%'"
+    + " OR lower(coalesce(source_db,'')) LIKE '%rajveteranu%'"
+    + " OR lower(coalesce(source_url,'')) LIKE '%sportovnivozy.cz/%'"
+    + " OR lower(coalesce(source_url,'')) LIKE '%rajveteranu.cz/%')";
+  where.push(supportsFreshness
+    ? "(NOT " + niche + " OR (is_active=1 AND missing_checks=0"
+      + " AND last_seen_at=last_checked_at"
+      + " AND julianday(last_checked_at) BETWEEN julianday('now','-48 hours') AND julianday('now','+5 minutes')))"
+    : "NOT " + niche);
 
   if (supportsActiveFlag) {
     where.push("COALESCE(CAST(is_active AS INTEGER), 1) <> 0");
@@ -299,6 +309,8 @@ export function initVehicleDb(dbPath) {
     db.prepare(`PRAGMA table_info(${JSON.stringify(table)})`).all().map((row) => row.name),
   );
   const supportsActiveFlag = columns.has("is_active");
+  const supportsFreshness = ["is_active", "last_seen_at", "last_checked_at", "missing_checks"]
+    .every((column) => columns.has(column));
 
   function fetchCandidates(input, limit = 5000) {
     const request = normalizeRequest(input);
@@ -314,7 +326,7 @@ export function initVehicleDb(dbPath) {
     let usedAttempt = attempts[attempts.length - 1];
 
     for (const attempt of attempts) {
-      const { where, params } = buildWhere(request, attempt, supportsActiveFlag);
+      const { where, params } = buildWhere(request, attempt, supportsActiveFlag, supportsFreshness);
       const rows = db
         .prepare(
           `
@@ -352,11 +364,13 @@ export function initVehicleDb(dbPath) {
     const { request, vehicles, usedAttempt } = fetchCandidates(input);
     const selected = vehicles.slice(0, Math.min(120, Math.max(vehicles.length, 0)));
     const prices = selected.map((vehicle) => vehicle.price_czk).filter(Boolean);
+    const sourceCounts = countMarketSources(selected);
 
     if (prices.length < 3) {
       return {
         found: false,
         count: prices.length,
+        source_counts: sourceCounts,
         price_czk: null,
         low_czk: null,
         high_czk: null,
@@ -369,6 +383,7 @@ export function initVehicleDb(dbPath) {
     return {
       found: true,
       count: prices.length,
+      source_counts: sourceCounts,
       price_czk: roundPrice(percentile(prices, 0.5)),
       low_czk: roundPrice(percentile(prices, 0.15)),
       high_czk: roundPrice(percentile(prices, 0.85)),

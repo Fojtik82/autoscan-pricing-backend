@@ -5,6 +5,8 @@ import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 import { parseSautoListingId } from "./sauto_lifecycle.js";
 import { parseBazosListing } from "./bazos_lifecycle.js";
+import { parseNicheListing } from "./source_identity.js";
+import { priceRefreshMetadata } from "./daily_price_refresh.js";
 import "dotenv/config";
 import express from "express";
 import { initDb } from "./db.js";
@@ -56,7 +58,7 @@ try {
 // Export only public listing fields, never VIN cache or search-log data.
 // This snapshot covers known ads confirmed in the latest complete source index;
 // it is not a claim that every market listing or every asking price was refetched.
-function createMobileVehicleSnapshot(sourcePath) {
+function createMobileVehicleSnapshot(sourcePath, { includeNiche = false } = {}) {
   const source = new Database(path.resolve(sourcePath), {
     readonly: true, fileMustExist: true,
   });
@@ -69,13 +71,14 @@ function createMobileVehicleSnapshot(sourcePath) {
   ];
   const now = new Date();
   const maxAgeMs = 48 * 60 * 60 * 1000;
-  const latest = { sauto: null, bazos: null };
-  const counts = { sauto: 0, bazos: 0 };
+  const names = ["sauto", "bazos", ...(includeNiche ? ["sportovnivozy", "rajveteranu"] : [])];
+  const latest = Object.fromEntries(names.map((name) => [name, null]));
+  const counts = Object.fromEntries(names.map((name) => [name, 0]));
   let output = null;
   function sourceName(url) {
     if (parseSautoListingId(url)) return "sauto";
     if (parseBazosListing(url)) return "bazos";
-    return null;
+    return includeNiche ? parseNicheListing(url)?.source ?? null : null;
   }
   function checkedDate(value) {
     if (typeof value !== "string" || !value.endsWith("Z")) return null;
@@ -90,13 +93,23 @@ function createMobileVehicleSnapshot(sourcePath) {
     ).iterate()) {
       const name = sourceName(row.source_url);
       const checked = checkedDate(row.last_checked_at);
-      if (!name || !checked) continue;
+      if (!["sauto", "bazos"].includes(name) || !checked) continue;
       if (checked.getTime() > now.getTime() + 300000) {
         throw new Error("Mobile snapshot source timestamp is in the future");
       }
       if (!latest[name] || checked > latest[name]) latest[name] = checked;
     }
-    for (const name of Object.keys(latest)) {
+    if (includeNiche && source.prepare(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='market_source_runs'",
+    ).get()) {
+      for (const run of source.prepare("SELECT source, completed_at FROM market_source_runs").all()) {
+        if (!["sportovnivozy", "rajveteranu"].includes(run.source)) continue;
+        const checked = checkedDate(run.completed_at);
+        if (checked && checked.getTime() <= now.getTime() + 300000
+            && now.getTime() - checked.getTime() <= maxAgeMs) latest[run.source] = checked;
+      }
+    }
+    for (const name of ["sauto", "bazos"]) {
       if (!latest[name] || now.getTime() - latest[name].getTime() > maxAgeMs) {
         throw new Error("Mobile snapshot source is missing or stale: " + name);
       }
@@ -124,17 +137,18 @@ function createMobileVehicleSnapshot(sourcePath) {
       for (const row of candidates.iterate()) {
         const name = sourceName(row.source_url);
         const checked = checkedDate(row.last_checked_at);
-        if (!name || !checked || checked.getTime() !== latest[name].getTime()) continue;
+        if (!name || !checked || !latest[name] || checked.getTime() !== latest[name].getTime()) continue;
         const key = name === "sauto"
           ? "sauto:" + parseSautoListingId(row.source_url)
-          : "bazos:" + parseBazosListing(row.source_url).key;
+          : name === "bazos" ? "bazos:" + parseBazosListing(row.source_url).key
+          : parseNicheListing(row.source_url).key;
         if (seen.has(key)) continue;
         seen.add(key);
         insert.run(fields.map((field) => row[field] ?? null));
         counts[name] += 1;
       }
     })();
-    const count = counts.sauto + counts.bazos;
+    const count = Object.values(counts).reduce((sum, value) => sum + value, 0);
     if (!counts.sauto || !counts.bazos || count > 1000000) {
       throw new Error("Mobile snapshot source counts are invalid");
     }
@@ -153,11 +167,12 @@ function createMobileVehicleSnapshot(sourcePath) {
     const filename = "vehicles-" + hash + ".db";
     const snapshotPath = path.join(directory, filename);
     fs.renameSync(temporaryPath, snapshotPath);
-    const dataThrough = new Date(Math.min(latest.sauto.getTime(), latest.bazos.getTime()));
+    const dataThrough = new Date(Math.min(...Object.values(latest).filter(Boolean).map((date) => date.getTime())));
     return {
       path: snapshotPath,
       manifest: {
         schema_version: 1,
+        source_schema: includeNiche ? 2 : 1,
         file: filename,
         sha256: hash,
         size_bytes: bytes,
@@ -165,11 +180,20 @@ function createMobileVehicleSnapshot(sourcePath) {
         generated_at: new Date().toISOString(),
         data_through: dataThrough.toISOString(),
         coverage: "known_listings_confirmed_by_latest_complete_source_index",
-        price_freshness: "existing_prices_not_refetched",
+        price_freshness: "daily_refresh_see_per_source_status",
+        price_refresh: {
+          ...priceRefreshMetadata(source, now),
+          ...(includeNiche ? Object.fromEntries(["sportovnivozy", "rajveteranu"].map((name) => [name, {
+            complete: Boolean(latest[name]),
+            checked_at: latest[name]?.toISOString() ?? null,
+            reason: latest[name] ? "refreshed" : "not_imported_or_stale",
+          }])) : {}),
+        },
         sources: Object.fromEntries(Object.keys(counts).map((name) => [name, {
-          complete: true,
+          complete: Boolean(latest[name]),
           row_count: counts[name],
-          observed_at: latest[name].toISOString(),
+          observed_at: latest[name]?.toISOString() ?? null,
+          ...(!latest[name] ? { reason: "not_imported_or_stale" } : {}),
         }])),
       },
     };
@@ -190,22 +214,33 @@ try {
   console.error("Mobile vehicle snapshot unavailable:", error.message);
 }
 
-app.get("/mobile-db/manifest.json", (_req, res) => {
+// Keep the original two-source contract for older installed applications.
+let multiSourceSnapshot = null;
+try {
+  if (vehicleDb) multiSourceSnapshot = createMobileVehicleSnapshot(VEHICLES_DB_PATH, { includeNiche: true });
+} catch (error) {
+  console.error("Multi-source mobile snapshot unavailable:", error.message);
+}
+
+app.get("/mobile-db/manifest.json", (req, res) => {
+  const snapshot = req.query.sources === "all" ? multiSourceSnapshot : mobileSnapshot;
   res.setHeader("Cache-Control", "no-store");
-  if (!mobileSnapshot ||
-      Date.now() - Date.parse(mobileSnapshot.manifest.data_through) > 48 * 60 * 60 * 1000) {
+  if (!snapshot ||
+      Date.now() - Date.parse(snapshot.manifest.data_through) > 48 * 60 * 60 * 1000) {
     return res.status(503).json({ error: "fresh_mobile_snapshot_unavailable" });
   }
-  return res.json(mobileSnapshot.manifest);
+  return res.json(snapshot.manifest);
 });
 
 app.get("/mobile-db/:filename", (req, res) => {
-  if (!mobileSnapshot || req.params.filename !== mobileSnapshot.manifest.file) {
+  const snapshot = [mobileSnapshot, multiSourceSnapshot].find((item) =>
+    item && req.params.filename === item.manifest.file);
+  if (!snapshot) {
     return res.status(404).json({ error: "mobile_snapshot_not_found" });
   }
   res.setHeader("Cache-Control", "public, max-age=86400, immutable");
   res.type("application/vnd.sqlite3");
-  return res.sendFile(mobileSnapshot.path, (error) => {
+  return res.sendFile(snapshot.path, (error) => {
     if (error && !res.headersSent) res.status(503).end();
   });
 });
