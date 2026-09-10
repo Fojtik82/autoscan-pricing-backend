@@ -203,7 +203,9 @@ export function parseNicheDetail(html, listing) {
     /<td\b[^>]*>\s*([^<>]{1,100})\s*<\/td>\s*<td\b[^>]*>\s*(?:&nbsp;|\s)*<\/td>\s*<td\b[^>]*>([\s\S]*?)<\/td>/gi,
   );
   for (const row of rows) fields[fold(text(row[1]))] = text(row[2]);
-  if (!fields.znacka || !fields.model || !fields["datum aktualizace"]) {
+  // Never-edited listings have only an insertion date on both sites.
+  if (!fields.znacka || !fields.model
+      || !(fields["datum aktualizace"] || fields["datum vlozeni"])) {
     throw new Error(listing.source + ": unrecognized detail structure");
   }
   const year = number(fields["rok vyroby"], 1886, new Date().getUTCFullYear() + 1);
@@ -290,7 +292,9 @@ async function collect(source) {
         if (results.length % 250 === 0) {
           console.log(source.id + ": details " + results.length + "/" + candidates.length);
         }
-      } catch (error) { failure = error; }
+      } catch (error) {
+        failure = new Error(item.url + ": " + String(error.message || error));
+      }
     }
   }
   // Two paced workers per source; no proxies, login or challenge bypass.

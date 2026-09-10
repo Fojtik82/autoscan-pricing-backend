@@ -4,6 +4,7 @@ import {
   applyExistingPriceRefresh,
   bazosDetailPriceObservation,
   bazosPagePriceObservations,
+  bazosPaginationWindowEnded,
   existingPriceTargets,
   fillMissingPriceObservations,
   sautoPriceObservation,
@@ -374,7 +375,7 @@ async function fetchJson(url, attempt = 1) {
   }
 }
 
-async function fetchText(url, attempt = 1) {
+async function fetchText(url, attempt = 1, includeResponse = false) {
   try {
     const response = await fetch(url, {
       headers: {
@@ -384,20 +385,25 @@ async function fetchText(url, attempt = 1) {
       },
       signal: AbortSignal.timeout(30_000),
     });
+    if (includeResponse && [404, 410].includes(response.status)) {
+      await response.body?.cancel();
+      if (BAZOS_REQUEST_DELAY_MS > 0) await sleep(BAZOS_REQUEST_DELAY_MS);
+      return { status: response.status, url: response.url, html: "" };
+    }
     if (!response.ok) {
       if (attempt < 5 && [429, 500, 502, 503, 504].includes(response.status)) {
         await sleep(attempt * 2000);
-        return fetchText(url, attempt + 1);
+        return fetchText(url, attempt + 1, includeResponse);
       }
       throw new Error(`${response.status} ${response.statusText}: ${url}`);
     }
     const text = await response.text();
     if (BAZOS_REQUEST_DELAY_MS > 0) await sleep(BAZOS_REQUEST_DELAY_MS);
-    return text;
+    return includeResponse ? { html: text, status: response.status, url: response.url } : text;
   } catch (error) {
     if (attempt < 5 && !/^4\d\d /.test(String(error.message || error))) {
       await sleep(attempt * 2000);
-      return fetchText(url, attempt + 1);
+      return fetchText(url, attempt + 1, includeResponse);
     }
     throw error;
   }
@@ -720,6 +726,7 @@ function cutoffCalendarDate(lookbackDays) {
 async function fetchBazosDailyCategory(category, cutoffDate) {
   const found = [];
   const priceObservations = new Map();
+  const indexWarnings = [];
   let total = null;
   let quietPages = 0;
   let pages = 0;
@@ -731,7 +738,13 @@ async function fetchBazosDailyCategory(category, cutoffDate) {
       break;
     }
     const url = bazosCategoryPageUrl(category, offset);
-    const html = await fetchText(url);
+    let html;
+    try { html = await fetchText(url); }
+    catch (error) {
+      // Keep verified earlier pages, but still report this real request failure.
+      error.partial = { recent: found, priceObservations, indexWarnings };
+      throw error;
+    }
     const parsed = parseBazosListingPage(html, category);
     total = parsed.total;
     if (DAILY_PRICE_REFRESH_ENABLED) {
@@ -750,6 +763,12 @@ async function fetchBazosDailyCategory(category, cutoffDate) {
     pages += 1;
     quietPages = recent.length ? 0 : quietPages + 1;
     if (!parsed.listings.length || offset + 20 >= total) break;
+    if (DAILY_PRICE_REFRESH_ENABLED && bazosPaginationWindowEnded(html, category, offset, total)) {
+      indexWarnings.push(category.host + "/" + category.slug
+        + ": public pagination ended at " + (offset + 20) + "/" + total
+        + "; remaining known ads require detail price refresh");
+      break;
+    }
     if (!DAILY_PRICE_REFRESH_ENABLED
         && pages >= BAZOS_MIN_DAILY_PAGES_PER_CATEGORY && quietPages >= 2) break;
   }
@@ -766,7 +785,7 @@ async function fetchBazosDailyCategory(category, cutoffDate) {
     `Bazos daily category=${category.group}/${category.slug} pages=${pages} `
     + `recent=${found.length} total=${total ?? 0}`,
   );
-  return { recent: found, priceObservations };
+  return { recent: found, priceObservations, indexWarnings };
 }
 
 async function fetchBazosDailyCandidates(existingKeys) {
@@ -780,7 +799,8 @@ async function fetchBazosDailyCandidates(existingKeys) {
         if (!DAILY_PRICE_REFRESH_ENABLED) throw error;
         // Detail fallback can still refresh known ads; never treat this as an empty site.
         return {
-          recent: [], priceObservations: new Map(),
+          recent: [], priceObservations: new Map(), indexWarnings: [],
+          ...error.partial,
           error: category.host + "/" + category.slug + ": " + String(error.message || error),
         };
       }
@@ -789,9 +809,11 @@ async function fetchBazosDailyCandidates(existingKeys) {
   const recent = categoryResults.flatMap((result) => result.recent);
   const priceObservations = new Map();
   const indexErrors = [];
+  const indexWarnings = [];
   for (const result of categoryResults) {
     for (const [key, value] of result.priceObservations) priceObservations.set(key, value);
     if (result.error) indexErrors.push(result.error);
+    indexWarnings.push(...(result.indexWarnings || []));
   }
   const seen = new Set();
   const candidates = recent.filter((candidate) => {
@@ -803,15 +825,15 @@ async function fetchBazosDailyCandidates(existingKeys) {
     `Bazos existing_ids=${existingKeys.size} recent_listings=${recent.length} `
     + `new_candidates=${candidates.length}`,
   );
-  return { candidates, priceObservations, indexErrors };
+  return { candidates, priceObservations, indexErrors, indexWarnings };
 }
 
 async function scrapeNewBazosRows(db, existingKeys) {
   const taxonomy = loadBazosTaxonomy(db);
-  const { candidates, priceObservations, indexErrors } = await fetchBazosDailyCandidates(existingKeys);
+  const { candidates, priceObservations, indexErrors, indexWarnings } = await fetchBazosDailyCandidates(existingKeys);
   if (!BAZOS_FETCH_DETAILS) {
     return { rows: [], candidates: candidates.length, rejected: 0, detailsSkipped: true,
-      priceObservations, indexErrors };
+      priceObservations, indexErrors, indexWarnings };
   }
   const rows = [];
   let cursor = 0;
@@ -823,10 +845,11 @@ async function scrapeNewBazosRows(db, existingKeys) {
       const index = cursor;
       cursor += 1;
       const candidate = candidates[index];
-      const html = await fetchText(candidate.url);
+      const detail = await fetchText(candidate.url, 1, DAILY_PRICE_REFRESH_ENABLED);
+      const html = DAILY_PRICE_REFRESH_ENABLED ? detail.html : detail;
       const row = parseBazosDetail(html, candidate, taxonomy);
       if (DAILY_PRICE_REFRESH_ENABLED) {
-        const observed = bazosDetailPriceObservation(html, candidate);
+        const observed = bazosDetailPriceObservation(html, candidate, detail);
         if (observed.state !== "unknown") priceObservations.set(candidate.key, observed);
       }
       if (row) rows.push(row);
@@ -842,7 +865,7 @@ async function scrapeNewBazosRows(db, existingKeys) {
     Array.from({ length: Math.min(BAZOS_DETAIL_CONCURRENCY, candidates.length) }, () => worker()),
   );
   return { rows, candidates: candidates.length, rejected, detailsSkipped: false,
-    priceObservations, indexErrors };
+    priceObservations, indexErrors, indexWarnings };
 }
 
 async function fetchBazosLiveSite(host, label) {
@@ -1003,7 +1026,8 @@ async function refreshDailyExistingPrices(db, liveIndex, bazosLiveIndex, bazosSc
         if (Number(detail?.id) !== target.liveKey) throw new Error("Sauto detail identity mismatch");
         return sautoPriceObservation(detail, buildSautoListingUrl(detail));
       }
-      return bazosDetailPriceObservation(await fetchText(target.url), target);
+      const detail = await fetchText(target.url, 1, true);
+      return bazosDetailPriceObservation(detail.html, target, detail);
     }, {
       source, concurrency: source === "sauto" ? RECONCILE_CONCURRENCY : BAZOS_DETAIL_CONCURRENCY,
       maxDetails: source === "bazos" && !BAZOS_FETCH_DETAILS ? 0 : PRICE_DETAIL_FALLBACK_LIMIT,
@@ -1011,6 +1035,7 @@ async function refreshDailyExistingPrices(db, liveIndex, bazosLiveIndex, bazosSc
     const summary = applyExistingPriceRefresh(db, source, targets, prices, {
       dryRun: DRY_RUN, details,
       indexErrors: source === "bazos" ? bazosScrape.indexErrors : [],
+      indexWarnings: source === "bazos" ? bazosScrape.indexWarnings : [],
     });
     summaries.push(summary);
     console.log("DAILY_PRICE_REFRESH " + JSON.stringify(summary));

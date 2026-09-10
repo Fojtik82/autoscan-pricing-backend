@@ -67,11 +67,48 @@ export function bazosPagePriceObservations(html, category) {
   return prices;
 }
 
-export function bazosDetailPriceObservation(html, target) {
+export function bazosPaginationWindowEnded(html, category, offset, total) {
+  // Bazos exposes at most 20,000 cards in a category even when total is larger.
+  // Confirm that its navigation offers no next page before using detail fallback.
+  if (offset < 19980 || offset + 20 >= total) return false;
+  const origin = "https://" + category.host;
+  for (const match of String(html).matchAll(/<a\b[^>]*href=["']([^"']+)["']/gi)) {
+    try {
+      const url = new URL(match[1].replace(/&amp;/gi, "&"), origin);
+      const parts = url.pathname.split("/").filter(Boolean);
+      if (url.origin === origin && !url.search && parts.length === 2
+          && parts[0] === category.slug && /^\d+$/.test(parts[1])
+          && Number(parts[1]) > offset) return false;
+    } catch { /* A malformed navigation link is not a next page. */ }
+  }
+  return true;
+}
+
+export function bazosDetailPriceObservation(html, target, response = {}) {
   // Search, login and unrelated redirects cannot refresh a concrete ad's price.
   const canonicalTag = /<link\b(?=[^>]*\brel=["']canonical["'])[^>]*>/i.exec(String(html))?.[0];
   const href = canonicalTag && /\bhref=["']([^"']+)["']/i.exec(canonicalTag)?.[1];
   const listing = href && parseBazosListing(href.replace(/&amp;/gi, "&"));
+  const requested = parseBazosListing(target.url);
+  if (requested?.key === target.key && response.url) {
+    try {
+      const final = new URL(response.url);
+      const canonical = href && new URL(href.replace(/&amp;/gi, "&"));
+      if (final.origin === "https://" + requested.domain) {
+        if ([404, 410].includes(response.status)
+            && parseBazosListing(final.href)?.key === target.key) {
+          return observation({ state: "unavailable", reason: "detail_http_" + response.status }, target.url);
+        }
+        if (response.status === 200 && /^\/inzeraty\/[^/]+\/$/.test(final.pathname)
+            && canonical?.origin === final.origin && canonical?.pathname === final.pathname
+            && /<h1\b[^>]*class=["']?nadpiskategorie["']?[^>]*>/i.test(html)
+            && !/<h1\b[^>]*class=["']?nadpisdetail["']?[^>]*>/i.test(html)) {
+          // The original URL led to a confirmed search page, not to this ad.
+          return observation({ state: "unavailable", reason: "detail_redirected_to_search" }, target.url);
+        }
+      }
+    } catch { /* Unknown redirects never prove that an ad disappeared. */ }
+  }
   if (!listing || listing.key !== target.key
       || !/<h1\s+class=["']?nadpisdetail["']?[^>]*>/i.test(html)) {
     return observation(unknown());
@@ -132,7 +169,8 @@ export async function fillMissingPriceObservations(targets, prices, fetchPrice, 
         prices.set(target.key, result);
       } catch (error) {
         failed += 1;
-        if (errors.length < 3) errors.push(String(error.message || error));
+        if (errors.length < 3) errors.push(String(target.url || target.key)
+          + ": " + String(error.message || error));
       }
       if (attempted % 250 === 0) console.log(source + ": price details " + attempted + "/" + missing.length);
     }
@@ -142,20 +180,23 @@ export async function fillMissingPriceObservations(targets, prices, fetchPrice, 
 }
 
 export function applyExistingPriceRefresh(db, source, targets, prices, {
-  dryRun = false, details = null, indexErrors = [],
+  dryRun = false, details = null, indexErrors = [], indexWarnings = [],
 } = {}) {
   const summary = {
     source, checked_at: new Date().toISOString(), dry_run: dryRun,
-    targeted: targets.length, priced: 0, unpriced: 0, unknown: 0,
-    changed_listings: 0, updated_rows: 0, complete: false,
-    details, index_errors: indexErrors,
+    targeted: targets.length, priced: 0, unpriced: 0, unavailable: 0, unknown: 0,
+    changed_listings: 0, updated_rows: 0, deactivated_rows: 0, complete: false,
+    details, index_errors: indexErrors, index_warnings: indexWarnings,
   };
   const accepted = [];
   for (const target of targets) {
     const found = prices.get(target.key);
     const price = found?.state === "priced" ? validPrice(found.price) : null;
     const stamp = Date.parse(found?.checkedAt);
-    if (!found || !["priced", "unpriced"].includes(found.state)
+    const unavailable = source === "bazos" && found?.state === "unavailable"
+      && ["detail_http_404", "detail_http_410", "detail_redirected_to_search"].includes(found.reason)
+      && keyFor(source, found.url)?.key === target.key;
+    if (!found || (!["priced", "unpriced"].includes(found.state) && !unavailable)
         || (found.state === "priced" && price === null)
         || !Number.isFinite(stamp) || stamp > Date.now() + 300000
         || Date.now() - stamp > 24 * 60 * 60 * 1000) {
@@ -163,7 +204,8 @@ export function applyExistingPriceRefresh(db, source, targets, prices, {
       continue;
     }
     const next = found.state === "priced" ? String(price) : null;
-    const changed = target.rows.some((row) => String(row.price ?? "") !== String(next ?? ""));
+    const changed = !unavailable
+      && target.rows.some((row) => String(row.price ?? "") !== String(next ?? ""));
     if (changed) summary.changed_listings += 1;
     summary[found.state] += 1;
     accepted.push({ target, found, price, next });
@@ -178,6 +220,10 @@ export function applyExistingPriceRefresh(db, source, targets, prices, {
       + "CREATE TABLE IF NOT EXISTS market_price_refresh_runs ("
       + "source TEXT PRIMARY KEY, checked_at TEXT NOT NULL, summary_json TEXT NOT NULL)");
     const update = db.prepare("UPDATE vehicle_app SET price=?,source_url=COALESCE(?,source_url) WHERE rowid=?");
+    const deactivate = accepted.some(({ found }) => found.state === "unavailable")
+      ? db.prepare("UPDATE vehicle_app SET is_active=0,"
+        + "missing_checks=MAX(COALESCE(missing_checks,0),1),last_checked_at=? WHERE rowid=?")
+      : null;
     const remember = db.prepare("INSERT INTO listing_price_observations"
       + "(listing_key,source,checked_at,state,price_czk,last_numeric_price) VALUES(?,?,?,?,?,?)"
       + " ON CONFLICT(listing_key) DO UPDATE SET source=excluded.source,checked_at=excluded.checked_at,"
@@ -186,7 +232,13 @@ export function applyExistingPriceRefresh(db, source, targets, prices, {
     for (const { target, found, price, next } of accepted) {
       const canonical = found.url && keyFor(source, found.url)?.key === target.key ? found.url : null;
       const lastNumeric = price ?? target.rows.map((row) => validPrice(row.price)).find((value) => value !== null) ?? null;
-      for (const row of target.rows) summary.updated_rows += update.run(next, canonical, row.rowid).changes;
+      for (const row of target.rows) {
+        if (found.state === "unavailable") {
+          summary.deactivated_rows += deactivate.run(found.checkedAt, row.rowid).changes;
+        } else {
+          summary.updated_rows += update.run(next, canonical, row.rowid).changes;
+        }
+      }
       remember.run(target.key, source, found.checkedAt, found.state, price, lastNumeric);
     }
     db.prepare("INSERT INTO market_price_refresh_runs(source,checked_at,summary_json) VALUES(?,?,?)"
@@ -212,11 +264,10 @@ export function priceRefreshMetadata(db, now = new Date()) {
       result[row.source] = {
         complete: fresh && summary.complete === true, checked_at: row.checked_at,
         targeted: summary.targeted, priced: summary.priced,
-        unpriced: summary.unpriced, unknown: summary.unknown,
+        unpriced: summary.unpriced, unavailable: summary.unavailable || 0, unknown: summary.unknown,
         reason: !fresh ? "stale" : summary.complete ? "refreshed" : "partial_kept_last_known_prices",
       };
     } catch { /* An unreadable status never proves fresh prices. */ }
   }
   return result;
 }
-
