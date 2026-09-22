@@ -16,6 +16,7 @@ import { initSearchLogsDb } from "./search_logs.js";
 import { initVehicleIngestDb, isAuthorizedIngestRequest } from "./vehicle_ingest.js";
 import { normalizeVin, validateVin } from "./vin.js";
 import { ensureVehicleDatabase } from "./vehicle_db_archive.js";
+import { loadProviderEnvironment, createVehicleProvider, registerVehicleProvider } from "./vehicle_provider.js";
 
 const PORT = Number(process.env.PORT || 3000);
 const SQLITE_PATH = process.env.SQLITE_PATH || "./vin_cache.db";
@@ -41,6 +42,8 @@ app.use((req, res, next) => {
 });
 
 const cache = initDb(SQLITE_PATH);
+loadProviderEnvironment();
+registerVehicleProvider(app, createVehicleProvider({ databasePath: SQLITE_PATH }));
 const searchLogs = initSearchLogsDb(SQLITE_PATH);
 let vehicleDb = null;
 let vehicleIngestDb = null;
