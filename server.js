@@ -15,7 +15,7 @@ import { initVehicleDb } from "./price_db.js";
 import { initSearchLogsDb } from "./search_logs.js";
 import { initVehicleIngestDb, isAuthorizedIngestRequest } from "./vehicle_ingest.js";
 import { normalizeVin, validateVin } from "./vin.js";
-import { ensureVehicleDatabaseSync } from "./vehicle_db_archive.js";
+import { ensureVehicleDatabase } from "./vehicle_db_archive.js";
 
 const PORT = Number(process.env.PORT || 3000);
 const SQLITE_PATH = process.env.SQLITE_PATH || "./vin_cache.db";
@@ -46,7 +46,7 @@ let vehicleDb = null;
 let vehicleIngestDb = null;
 
 try {
-  ensureVehicleDatabaseSync(VEHICLES_DB_PATH);
+  await ensureVehicleDatabase(VEHICLES_DB_PATH);
   vehicleDb = initVehicleDb(VEHICLES_DB_PATH);
   if (VEHICLE_INGEST_API_KEY) vehicleIngestDb = initVehicleIngestDb(VEHICLES_DB_PATH);
   console.log("Vehicle price DB loaded", vehicleDb.health());
@@ -58,7 +58,7 @@ try {
 // Export only public listing fields, never VIN cache or search-log data.
 // This snapshot covers known ads confirmed in the latest complete source index;
 // it is not a claim that every market listing or every asking price was refetched.
-function createMobileVehicleSnapshot(sourcePath, { includeNiche = false } = {}) {
+async function createMobileVehicleSnapshot(sourcePath, { includeNiche = false } = {}) {
   const source = new Database(path.resolve(sourcePath), {
     readonly: true, fileMustExist: true,
   });
@@ -163,7 +163,9 @@ function createMobileVehicleSnapshot(sourcePath, { includeNiche = false } = {}) 
     if (bytes < 512 || bytes > 128 * 1024 * 1024) {
       throw new Error("Mobile snapshot exceeds the supported download size");
     }
-    const hash = createHash("sha256").update(fs.readFileSync(temporaryPath)).digest("hex");
+    const hasher = createHash("sha256");
+    for await (const chunk of fs.createReadStream(temporaryPath)) hasher.update(chunk);
+    const hash = hasher.digest("hex");
     const filename = "vehicles-" + hash + ".db";
     const snapshotPath = path.join(directory, filename);
     fs.renameSync(temporaryPath, snapshotPath);
@@ -205,7 +207,7 @@ function createMobileVehicleSnapshot(sourcePath, { includeNiche = false } = {}) 
 
 let mobileSnapshot = null;
 try {
-  if (vehicleDb) mobileSnapshot = createMobileVehicleSnapshot(VEHICLES_DB_PATH);
+  if (vehicleDb) mobileSnapshot = await createMobileVehicleSnapshot(VEHICLES_DB_PATH);
   if (mobileSnapshot) {
     console.log("Mobile vehicle snapshot ready", mobileSnapshot.manifest);
   }
@@ -217,7 +219,7 @@ try {
 // Keep the original two-source contract for older installed applications.
 let multiSourceSnapshot = null;
 try {
-  if (vehicleDb) multiSourceSnapshot = createMobileVehicleSnapshot(VEHICLES_DB_PATH, { includeNiche: true });
+  if (vehicleDb) multiSourceSnapshot = await createMobileVehicleSnapshot(VEHICLES_DB_PATH, { includeNiche: true });
 } catch (error) {
   console.error("Multi-source mobile snapshot unavailable:", error.message);
 }

@@ -31,7 +31,7 @@ function askingPrice(value) {
   }
   const folded = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   // A confirmed withdrawal of the numeric asking price is not a network error.
-  if (/^(?:dohodou|nabidnete|v textu|cena v textu|na dotaz|zdarma|vymena|vymenou|cenu nabidnete)$/.test(folded)
+  if (/^(?:dohodou|nabidnete|v textu|cena v textu|na dotaz|zdarma|vymena|vymenou|cenu nabidnete|nerozhoduje)$/.test(folded)
       || /^\d[\d\s.,]*\s*(?:eur|\u20ac)$/i.test(text)) {
     return { state: "unpriced", price: null };
   }

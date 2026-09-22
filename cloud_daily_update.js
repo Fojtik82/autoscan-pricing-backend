@@ -39,7 +39,7 @@ import {
 } from "./sauto_lifecycle.js";
 import {
   compressVehicleDatabase,
-  ensureVehicleDatabaseSync,
+  ensureVehicleDatabase,
   vehicleDatabaseArchivePath,
 } from "./vehicle_db_archive.js";
 
@@ -1050,7 +1050,7 @@ async function main() {
     ? path.resolve(process.env.CLOUD_UPDATE_DB_PATH)
     : path.join(repoDir, "data", "vehicles_ai.db");
 
-  ensureVehicleDatabaseSync(dbPath);
+  await ensureVehicleDatabase(dbPath);
 
   if (!fs.existsSync(dbPath)) {
     throw new Error(`Database not found: ${dbPath}`);
