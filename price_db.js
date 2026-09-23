@@ -1,5 +1,5 @@
 import path from "node:path";
-import { countMarketSources } from "./source_identity.js";
+import { countMarketSources, marketSourceId } from "./source_identity.js";
 import Database from "better-sqlite3";
 
 const TABLE_CANDIDATES = [
@@ -401,8 +401,58 @@ export function initVehicleDb(dbPath) {
   }
 
   function findComps(input, limit = 12) {
-    const { vehicles } = fetchCandidates(input, Math.max(1000, Number(limit) * 80));
-    return vehicles.slice(0, Math.min(Number(limit) || 12, 30)).map((vehicle) => ({
+    const requested = Number(limit);
+    const cap = Number.isFinite(requested) ? Math.max(1, Math.min(Math.floor(requested), 5000)) : 12;
+    let vehicles;
+    if (input.mode === "trend") {
+      const request = normalizeRequest(input);
+      if (!request.brandNorm || !request.modelNorm || !request.year) return [];
+      const { where, params } = buildWhere(request, {
+        yearWindow: 8, useFuel: true, useKw: false,
+        useTransmission: false, useDrive: false, useDetail: false,
+      }, supportsActiveFlag, supportsFreshness);
+      // Sample every model year independently: the closest year must not
+      // consume the entire chart budget.
+      vehicles = db.prepare(`SELECT * FROM (
+        SELECT *, ROW_NUMBER() OVER (
+          PARTITION BY CAST(year AS INTEGER) ORDER BY source_url
+        ) AS year_rank FROM ${JSON.stringify(table)} WHERE ${where}
+      ) WHERE year_rank <= 290 ORDER BY year_rank, CAST(year AS INTEGER)`)
+        .all(params).map(rowToVehicle).filter(row => row.price_czk && row.year);
+    } else {
+      ({ vehicles } = fetchCandidates(input));
+    }
+    const seen = new Set();
+    vehicles = vehicles.filter(vehicle => {
+      try {
+        const url = new URL(vehicle.url);
+        if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return false;
+        url.search = ""; url.hash = "";
+        const key = url.toString();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      } catch { return false; }
+    });
+    // Preserve ranking within each source, while exposing each available
+    // source even in the short preview requested by older app versions.
+    const groups = new Map();
+    for (const vehicle of vehicles) {
+      const key = marketSourceId(vehicle.url, vehicle.source_db);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(vehicle);
+    }
+    const selected = [];
+    for (let index = 0; selected.length < cap; index++) {
+      let added = false;
+      for (const group of groups.values()) {
+        if (index < group.length && selected.length < cap) {
+          selected.push(group[index]); added = true;
+        }
+      }
+      if (!added) break;
+    }
+    return selected.map((vehicle) => ({
       source: vehicle.source,
       url: vehicle.url,
       brand: vehicle.brand,
@@ -413,6 +463,7 @@ export function initVehicleDb(dbPath) {
       motor: vehicle.motor,
       transmission: vehicle.transmission,
       drive: vehicle.drive,
+      kw: vehicle.kw,
       price_czk: vehicle.price_czk,
       scraped_at: vehicle.source_db,
     }));
