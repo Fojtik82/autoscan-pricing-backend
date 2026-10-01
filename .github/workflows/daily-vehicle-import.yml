@@ -65,7 +65,25 @@ jobs:
           BAZOS_SITEMAP_CONCURRENCY: '3'
           BAZOS_REQUEST_DELAY_MS: '250'
           BAZOS_FETCH_DETAILS: '1'
-        run: npm run cloud:update
+        run: |
+          # Keep the importer exit code, but make the actionable tail visible in
+          # both the job log and the workflow summary when it fails.
+          set +e
+          npm run cloud:update 2>&1 | tee cloud-update.log
+          IMPORT_EXIT=${PIPESTATUS[0]}
+          set -e
+
+          if [ "$IMPORT_EXIT" -ne 0 ]; then
+            {
+              echo '## CarPrice daily import failed'
+              echo
+              echo 'Last 100 lines of importer output:'
+              echo '```text'
+              tail -n 100 cloud-update.log || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit "$IMPORT_EXIT"
+          fi
 
       - name: Record completion status
         if: always()
