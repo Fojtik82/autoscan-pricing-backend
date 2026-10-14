@@ -1,7 +1,7 @@
 {
   "market": "SK",
   "currency": "EUR",
-  "updated_at": "2026-10-14T17:58:08.627Z",
+  "updated_at": "2026-10-14T21:29:00.056Z",
   "complete": false,
   "blocked": false,
   "sources": [
@@ -12,28 +12,27 @@
       "sitemaps_remaining": 0,
       "discovered": 52110,
       "counts": {
-        "done": 31779,
-        "error": 2,
-        "gone": 177,
-        "pending": 16617,
-        "rejected": 3535
+        "done": 47878,
+        "error": 6,
+        "gone": 313,
+        "rejected": 3913
       },
       "records": [
         {
           "vehicle_type": null,
-          "count": 19
+          "count": 1
         },
         {
           "vehicle_type": "commercial",
-          "count": 2591
+          "count": 3730
         },
         {
           "vehicle_type": "motorcycle",
-          "count": 778
+          "count": 1215
         },
         {
           "vehicle_type": "passenger",
-          "count": 28412
+          "count": 42933
         }
       ],
       "last_error": null,
@@ -42,16 +41,14 @@
     },
     {
       "source": "autovia",
-      "phase": "details",
+      "phase": "complete",
       "index_complete": true,
       "sitemaps_remaining": 0,
       "discovered": 29473,
       "counts": {
-        "done": 25911,
-        "error": 3,
-        "gone": 1034,
-        "pending": 1214,
-        "rejected": 1311
+        "done": 27045,
+        "gone": 1078,
+        "rejected": 1350
       },
       "records": [
         {
@@ -60,20 +57,20 @@
         },
         {
           "vehicle_type": "commercial",
-          "count": 2152
+          "count": 2245
         },
         {
           "vehicle_type": "motorcycle",
-          "count": 859
+          "count": 888
         },
         {
           "vehicle_type": "passenger",
-          "count": 22900
+          "count": 23912
         }
       ],
       "last_error": null,
       "started_at": "2026-10-14T10:53:40.833Z",
-      "completed_at": null
+      "completed_at": "2026-10-14T18:18:25.073Z"
     },
     {
       "source": "bazos_moto_sk",
@@ -103,23 +100,23 @@
       "sitemaps_remaining": 0,
       "discovered": 107530,
       "counts": {
-        "done": 26048,
-        "gone": 3,
-        "pending": 71149,
-        "rejected": 10330
+        "done": 41306,
+        "gone": 8,
+        "pending": 50306,
+        "rejected": 15910
       },
       "records": [
         {
           "vehicle_type": null,
-          "count": 115
+          "count": 113
         },
         {
           "vehicle_type": "commercial",
-          "count": 2738
+          "count": 4299
         },
         {
           "vehicle_type": "passenger",
-          "count": 23312
+          "count": 37009
         }
       ],
       "last_error": null,
