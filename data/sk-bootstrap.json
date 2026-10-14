@@ -1,0 +1,26 @@
+{
+  "checked_at": "2026-10-14T09:47:58.433Z",
+  "summaries": [
+    {
+      "source": "bazos_sk",
+      "parsed": 117,
+      "rejected": 3,
+      "errors": 0,
+      "coverage": "category_pages_partial"
+    },
+    {
+      "source": "autobazar_eu",
+      "parsed": 54,
+      "rejected": 0,
+      "errors": 0,
+      "coverage": "category_pages_partial"
+    },
+    {
+      "source": "autovia",
+      "parsed": 60,
+      "rejected": 0,
+      "errors": 0,
+      "coverage": "category_pages_partial"
+    }
+  ]
+}
