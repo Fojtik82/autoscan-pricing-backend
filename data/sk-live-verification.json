@@ -1,0 +1,10 @@
+{
+  "checked_at": "2026-10-14T09:18:26.635Z",
+  "sources": [
+    "bazos_sk",
+    "autobazar_eu",
+    "autovia"
+  ],
+  "rows": 3,
+  "coverage": "three_live_examples_only_not_a_full_import"
+}

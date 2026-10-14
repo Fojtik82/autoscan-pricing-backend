@@ -1,0 +1,16 @@
+# Creates only the second backend. The existing CZ service is managed separately.
+services:
+  - type: web
+    name: carprice-pricing-sk
+    runtime: node
+    plan: free
+    buildCommand: npm install --no-audit --no-fund
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: CARPRICE_MARKET
+        value: SK
+      - key: VEHICLES_DB_PATH
+        value: ./data/vehicles_sk.db
+      - key: SQLITE_PATH
+        value: ./vin_cache_sk.db

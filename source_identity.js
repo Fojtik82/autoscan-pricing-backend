@@ -1,5 +1,6 @@
 import { parseSautoListingId } from "./sauto_lifecycle.js";
 import { parseBazosListing } from "./bazos_lifecycle.js";
+import { parseSkListing } from "./sk_sources.js";
 
 export const MARKET_SOURCES = ["sauto", "bazos", "sportovnivozy", "rajveteranu"];
 
@@ -21,6 +22,8 @@ export function parseNicheListing(value) {
 }
 
 export function marketSourceId(url, sourceDb = "") {
+  const sk = parseSkListing(url);
+  if (sk) return sk.source;
   if (parseSautoListingId(url)) return "sauto";
   if (parseBazosListing(url)) return "bazos";
   const niche = parseNicheListing(url);
@@ -29,11 +32,13 @@ export function marketSourceId(url, sourceDb = "") {
   return MARKET_SOURCES.find((source) => name.includes(source)) || "other";
 }
 
-export function countMarketSources(vehicles) {
-  const counts = Object.fromEntries([...MARKET_SOURCES, "other"].map((id) => [id, 0]));
+export function countMarketSources(vehicles, market = 'CZ') {
+  const sources = market === 'SK' ? ['bazos_sk', 'autobazar_eu', 'autovia'] : MARKET_SOURCES;
+  const counts = Object.fromEntries([...sources, "other"].map((id) => [id, 0]));
   for (const vehicle of vehicles) {
     if (Number.isFinite(vehicle.price_czk) && vehicle.price_czk > 0) {
-      counts[marketSourceId(vehicle.url, vehicle.source_db)] += 1;
+      const source = marketSourceId(vehicle.url, vehicle.source_db);
+      counts[Object.hasOwn(counts, source) ? source : 'other'] += 1;
     }
   }
   return counts;

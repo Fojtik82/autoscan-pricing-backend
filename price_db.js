@@ -42,7 +42,11 @@ function parseNumber(value) {
   return Number.isFinite(numeric) ? numeric : null;
 }
 
-function parseMoney(value) {
+function parseMoney(value, currency = 'CZK') {
+  if (currency === 'EUR') {
+    const n = Number(String(value ?? '').replace(/\s/g, '').replace(',', '.'));
+    return Number.isFinite(n) && n >= 100 && n <= 2000000 ? n : null;
+  }
   if (value === null || value === undefined) {
     return null;
   }
@@ -115,8 +119,8 @@ function detectTable(db) {
   return TABLE_CANDIDATES.find((table) => existing.has(table));
 }
 
-function rowToVehicle(row) {
-  const price = parseMoney(row.price);
+function rowToVehicle(row, currency = 'CZK') {
+  const price = parseMoney(row.price, currency);
   const year = parseYear(row.year);
   const mileage = parseNumber(row.mileage);
   const kw = parseNumber(row.kw);
@@ -136,6 +140,7 @@ function rowToVehicle(row) {
     price_czk: price,
     title: row.title || "",
     source_db: row.source_db || "",
+    vin: row.vin || '',
   };
 }
 
@@ -297,7 +302,9 @@ function buildWhere(request, attempt, supportsActiveFlag = false, supportsFreshn
   return { where: where.join(" AND "), params };
 }
 
-export function initVehicleDb(dbPath) {
+export function initVehicleDb(dbPath, { market = 'CZ' } = {}) {
+  if (!['CZ', 'SK'].includes(market)) throw new Error('Unsupported market');
+  const currency = market === 'SK' ? 'EUR' : 'CZK';
   const resolvedPath = path.resolve(dbPath);
   const db = new Database(resolvedPath, { readonly: true, fileMustExist: true });
   const table = detectTable(db);
@@ -311,6 +318,34 @@ export function initVehicleDb(dbPath) {
   const supportsActiveFlag = columns.has("is_active");
   const supportsFreshness = ["is_active", "last_seen_at", "last_checked_at", "missing_checks"]
     .every((column) => columns.has(column));
+  if (market === 'SK' && (!supportsFreshness || !columns.has('market') || !columns.has('currency')))
+    throw new Error('SK database requires market, currency and lifecycle fields');
+  function marketWhere(where) {
+    if (market === 'SK') return where + ` AND market='SK' AND currency='EUR'
+      AND (source_url LIKE 'https://auto.bazos.sk/inzerat/%'
+        OR source_url LIKE 'https://www.autobazar.eu/detail/%'
+        OR source_url LIKE 'https://www.autobazar.eu/detail-nove-auto/%'
+        OR source_url LIKE 'https://www.autovia.sk/detail/%'
+        OR source_url LIKE 'https://www.autovia.sk/detail-nove-auto/%')
+      AND missing_checks=0 AND last_seen_at=last_checked_at
+      AND julianday(last_checked_at) BETWEEN julianday('now','-48 hours') AND julianday('now','+5 minutes')`;
+    return where + (columns.has('market') ? " AND COALESCE(market,'CZ')='CZ'" : '')
+      + (columns.has('currency') ? " AND COALESCE(currency,'CZK')='CZK'" : '')
+      + " AND lower(COALESCE(source_url,'')) NOT LIKE '%bazos.sk/%'"
+      + " AND lower(COALESCE(source_url,'')) NOT LIKE '%autobazar.eu/%'"
+      + " AND lower(COALESCE(source_url,'')) NOT LIKE '%autovia.sk/%'";
+  }
+  function uniqueVehicles(rows) {
+    if (market !== 'SK') return rows;
+    const seen = new Set();
+    return rows.filter(row => {
+      const portal = /^(?:autobazar_eu|autovia)$/.test(marketSourceId(row.url));
+      const key = row.vin || (portal ? 'portal:' + row.url.split('/').filter(Boolean).at(-1) : row.url);
+      if (seen.has(key)) return false;
+      seen.add(key); return true;
+    });
+  }
+  const roundMarketPrice = value => currency === 'EUR' ? Math.round(value / 10) * 10 : roundPrice(value);
 
   function fetchCandidates(input, limit = 5000) {
     const request = normalizeRequest(input);
@@ -332,16 +367,16 @@ export function initVehicleDb(dbPath) {
           `
           SELECT
             brand, model, year, mileage, fuel, motor, price, transmission, drive,
-            source_url, source_db, title, kw
+            source_url, source_db, title, kw, ${columns.has('vin') ? 'vin' : 'NULL AS vin'}
           FROM ${JSON.stringify(table)}
-          WHERE ${where}
+          WHERE ${marketWhere(where)}
           LIMIT @limit
           `,
         )
         .all({ ...params, limit });
 
       const mapped = rows
-        .map(rowToVehicle)
+        .map(row => rowToVehicle(row, currency))
         .filter((row) => row.price_czk && row.year);
 
       if (mapped.length > bestRows.length) {
@@ -357,14 +392,14 @@ export function initVehicleDb(dbPath) {
     }
 
     bestRows.sort((a, b) => scoreVehicle(a, request) - scoreVehicle(b, request));
-    return { request, vehicles: bestRows, usedAttempt, table };
+    return { request, vehicles: uniqueVehicles(bestRows), usedAttempt, table };
   }
 
-  function estimatePrice(input) {
+  function estimatePriceInternal(input) {
     const { request, vehicles, usedAttempt } = fetchCandidates(input);
     const selected = vehicles.slice(0, Math.min(120, Math.max(vehicles.length, 0)));
     const prices = selected.map((vehicle) => vehicle.price_czk).filter(Boolean);
-    const sourceCounts = countMarketSources(selected);
+    const sourceCounts = countMarketSources(selected, market);
 
     if (prices.length < 3) {
       return {
@@ -384,9 +419,9 @@ export function initVehicleDb(dbPath) {
       found: true,
       count: prices.length,
       source_counts: sourceCounts,
-      price_czk: roundPrice(percentile(prices, 0.5)),
-      low_czk: roundPrice(percentile(prices, 0.15)),
-      high_czk: roundPrice(percentile(prices, 0.85)),
+      price_czk: roundMarketPrice(percentile(prices, 0.5)),
+      low_czk: roundMarketPrice(percentile(prices, 0.15)),
+      high_czk: roundMarketPrice(percentile(prices, 0.85)),
       source: "backend_db",
       table,
       used_filters: usedAttempt,
@@ -398,6 +433,13 @@ export function initVehicleDb(dbPath) {
         fuel: request.fuelNorm,
       },
     };
+  }
+
+  function estimatePrice(input) {
+    const result = estimatePriceInternal(input);
+    if (market === 'CZ') return result;
+    const { price_czk, low_czk, high_czk, ...rest } = result;
+    return { ...rest, market, currency, price: price_czk, low: low_czk, high: high_czk };
   }
 
   function findComps(input, limit = 12) {
@@ -416,12 +458,13 @@ export function initVehicleDb(dbPath) {
       vehicles = db.prepare(`SELECT * FROM (
         SELECT *, ROW_NUMBER() OVER (
           PARTITION BY CAST(year AS INTEGER) ORDER BY source_url
-        ) AS year_rank FROM ${JSON.stringify(table)} WHERE ${where}
+        ) AS year_rank FROM ${JSON.stringify(table)} WHERE ${marketWhere(where)}
       ) WHERE year_rank <= 290 ORDER BY year_rank, CAST(year AS INTEGER)`)
-        .all(params).map(rowToVehicle).filter(row => row.price_czk && row.year);
+        .all(params).map(row => rowToVehicle(row, currency)).filter(row => row.price_czk && row.year);
     } else {
       ({ vehicles } = fetchCandidates(input));
     }
+    vehicles = uniqueVehicles(vehicles);
     const seen = new Set();
     vehicles = vehicles.filter(vehicle => {
       try {
@@ -464,7 +507,8 @@ export function initVehicleDb(dbPath) {
       transmission: vehicle.transmission,
       drive: vehicle.drive,
       kw: vehicle.kw,
-      price_czk: vehicle.price_czk,
+      ...(market === 'CZ' ? { price_czk: vehicle.price_czk }
+        : { price: vehicle.price_czk, currency, market }),
       scraped_at: vehicle.source_db,
     }));
   }

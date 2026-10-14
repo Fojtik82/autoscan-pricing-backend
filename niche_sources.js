@@ -47,7 +47,7 @@ function isGone(html) {
 }
 
 // Longest matching path; Allow wins ties. Never bypass robots or login.
-function robotsPolicy(body) {
+export function robotsPolicy(body) {
   const groups = [];
   let group = null;
   for (const raw of body.split(/\r?\n/)) {
@@ -80,7 +80,7 @@ function robotsPolicy(body) {
   const scored = groups.map((entry) => ({
     ...entry,
     score: Math.max(-1, ...entry.agents.map((agent) =>
-      agent === "*" ? 0 : "carpricebot".includes(agent) ? agent.length : -1)),
+      agent === "*" ? 0 : agent === "carpricebot" ? agent.length : -1)),
   }));
   const best = Math.max(-1, ...scored.map((entry) => entry.score));
   const selected = best < 0 ? [] : scored.filter((entry) => entry.score === best);
@@ -96,11 +96,11 @@ function robotsPolicy(body) {
   };
 }
 
-async function makeReader(source) {
+export async function makeReader(source) {
   let policy = null;
   let queue = Promise.resolve();
   let lastStarted = 0;
-  let delay = bounded(process.env.NICHE_REQUEST_DELAY_MS, 600, 500, 60000);
+  let delay = bounded(source.requestDelayMs ?? process.env.NICHE_REQUEST_DELAY_MS, 600, 500, 60000);
   async function pace() {
     const next = queue.then(async () => {
       await sleep(Math.max(0, lastStarted + delay - Date.now()));
@@ -141,7 +141,7 @@ async function makeReader(source) {
       let length = 0;
       for await (const chunk of response.body) {
         length += chunk.length;
-        if (length > 4 * 1024 * 1024) throw new Error(source.id + ": response too large");
+        if (length > (source.maxResponseBytes ?? 4 * 1024 * 1024)) throw new Error(source.id + ": response too large");
         chunks.push(Buffer.from(chunk));
       }
       const bytes = Buffer.concat(chunks);

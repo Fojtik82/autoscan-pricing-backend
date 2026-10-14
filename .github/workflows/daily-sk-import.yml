@@ -1,0 +1,38 @@
+name: CarPrice Slovakia import
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: carprice-sk-database
+  cancel-in-progress: false
+jobs:
+  update-sk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: codex/slovakia-backend
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund --package-lock=false
+      - name: Import Slovak listings into the Slovak database only
+        env:
+          CARPRICE_MARKET: SK
+          SK_MAX_DETAILS_PER_SOURCE: '5000'
+          SK_REQUEST_DELAY_MS: '600'
+        run: npm run cloud:update:sk
+      - name: Publish SK database archive
+        run: |
+          git config user.name 'CarPrice SK DB Bot'
+          git config user.email 'carprice-sk-db-bot@users.noreply.github.com'
+          git add data/vehicles_sk.db.gz
+          if ! git diff --cached --quiet; then
+            git commit -m 'Update Slovakia vehicle database'
+            git pull --rebase origin codex/slovakia-backend
+            git push origin HEAD:codex/slovakia-backend
+          fi

@@ -12,6 +12,7 @@ import express from "express";
 import { initDb } from "./db.js";
 import { decodeVinPipeline } from "./decoder_pipeline.js";
 import { initVehicleDb } from "./price_db.js";
+import { requestedMarket } from './market_routing.js';
 import { initSearchLogsDb } from "./search_logs.js";
 import { initVehicleIngestDb, isAuthorizedIngestRequest } from "./vehicle_ingest.js";
 import { normalizeVin, validateVin } from "./vin.js";
@@ -19,10 +20,13 @@ import { ensureVehicleDatabase } from "./vehicle_db_archive.js";
 import { loadProviderEnvironment, createVehicleProvider, registerVehicleProvider } from "./vehicle_provider.js";
 
 const PORT = Number(process.env.PORT || 3000);
+const SERVER_MARKET = (process.env.CARPRICE_MARKET || 'CZ').toUpperCase();
+if (!['CZ', 'SK'].includes(SERVER_MARKET)) throw new Error('CARPRICE_MARKET must be CZ or SK');
 const SQLITE_PATH = process.env.SQLITE_PATH || "./vin_cache.db";
 const NHTSA_TIMEOUT_MS = Number(process.env.NHTSA_TIMEOUT_MS || 8000);
 const VEHICLES_DB_PATH =
-  process.env.VEHICLES_DB_PATH || process.env.VEHICLE_DB_PATH || "./data/vehicles_ai.db";
+  process.env.VEHICLES_DB_PATH || process.env.VEHICLE_DB_PATH ||
+  (SERVER_MARKET === 'SK' ? './data/vehicles_sk.db' : './data/vehicles_ai.db');
 const VEHICLE_INGEST_API_KEY = String(process.env.VEHICLE_INGEST_API_KEY || "");
 const SEARCH_LOGS_ADMIN_KEY = String(process.env.SEARCH_LOGS_ADMIN_KEY || "");
 
@@ -50,12 +54,31 @@ let vehicleIngestDb = null;
 
 try {
   await ensureVehicleDatabase(VEHICLES_DB_PATH);
-  vehicleDb = initVehicleDb(VEHICLES_DB_PATH);
-  if (VEHICLE_INGEST_API_KEY) vehicleIngestDb = initVehicleIngestDb(VEHICLES_DB_PATH);
+  vehicleDb = initVehicleDb(VEHICLES_DB_PATH, { market: SERVER_MARKET });
+  if (VEHICLE_INGEST_API_KEY && SERVER_MARKET === 'CZ') vehicleIngestDb = initVehicleIngestDb(VEHICLES_DB_PATH);
   console.log("Vehicle price DB loaded", vehicleDb.health());
 } catch (error) {
   console.error("Vehicle price DB was not loaded:", error.message);
 }
+
+app.use(['/price/estimate', '/estimate', '/api/estimate', '/comps', '/market/status'], (req, res, next) => {
+  try {
+    const market = requestedMarket(req.method === 'GET' ? req.query : req.body);
+    if (market !== SERVER_MARKET) return res.status(409).json({
+      found: false, error: 'wrong_market_backend', market: SERVER_MARKET,
+    });
+    if (!vehicleDb) return res.status(503).json({ found: false, market,
+      currency: market === 'SK' ? 'EUR' : 'CZK', error: 'market_database_unavailable' });
+    req.marketDatabase = vehicleDb;
+    req.marketCode = SERVER_MARKET;
+    next();
+  } catch (error) { return res.status(400).json({ error: error.message }); }
+});
+
+app.get('/market/status', (req, res) => res.json({
+  market: req.marketCode, currency: req.marketCode === 'SK' ? 'EUR' : 'CZK',
+  ...req.marketDatabase.health(),
+}));
 
 
 // Export only public listing fields, never VIN cache or search-log data.
@@ -210,7 +233,7 @@ async function createMobileVehicleSnapshot(sourcePath, { includeNiche = false } 
 
 let mobileSnapshot = null;
 try {
-  if (vehicleDb) mobileSnapshot = await createMobileVehicleSnapshot(VEHICLES_DB_PATH);
+  if (vehicleDb && SERVER_MARKET === 'CZ') mobileSnapshot = await createMobileVehicleSnapshot(VEHICLES_DB_PATH);
   if (mobileSnapshot) {
     console.log("Mobile vehicle snapshot ready", mobileSnapshot.manifest);
   }
@@ -222,7 +245,7 @@ try {
 // Keep the original two-source contract for older installed applications.
 let multiSourceSnapshot = null;
 try {
-  if (vehicleDb) multiSourceSnapshot = await createMobileVehicleSnapshot(VEHICLES_DB_PATH, { includeNiche: true });
+  if (vehicleDb && SERVER_MARKET === 'CZ') multiSourceSnapshot = await createMobileVehicleSnapshot(VEHICLES_DB_PATH, { includeNiche: true });
 } catch (error) {
   console.error("Multi-source mobile snapshot unavailable:", error.message);
 }
@@ -332,14 +355,18 @@ app.get("/", (_req, res) => {
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
+    market: SERVER_MARKET,
+    currency: SERVER_MARKET === 'SK' ? 'EUR' : 'CZK',
     ts: Date.now(),
     vehicleDb: vehicleDb ? vehicleDb.health() : null,
   });
 });
 
 app.get("/healthz", (_req, res) => {
-  res.json({
+  res.status(vehicleDb ? 200 : 503).json({
     status: "ok",
+    market: SERVER_MARKET,
+    currency: SERVER_MARKET === 'SK' ? 'EUR' : 'CZK',
     ts: Date.now(),
     vehicleDbReady: Boolean(vehicleDb),
   });
@@ -356,10 +383,9 @@ app.get("/price/health", (_req, res) => {
 });
 
 app.post("/price/estimate", (req, res) => {
-  if (!vehicleDbRequired(res)) return;
 
   try {
-    return res.json(vehicleDb.estimatePrice(req.body || {}));
+    return res.json(req.marketDatabase.estimatePrice(req.body || {}));
   } catch (error) {
     return res.status(500).json({
       found: false,
@@ -438,11 +464,11 @@ app.post("/vehicle-ai/lookup", (req, res) => {
 });
 
 app.post(["/estimate", "/api/estimate"], (req, res) => {
-  if (!vehicleDbRequired(res)) return;
 
   try {
     const payload = mapLegacyEstimatePayload(req.body || {});
-    const result = vehicleDb.estimatePrice(payload);
+    const result = req.marketDatabase.estimatePrice(payload);
+    if (req.marketCode === 'SK') return res.json(result);
     return res.json(legacyEstimateResponse(result, req.body || {}));
   } catch (error) {
     return res.status(500).json({
@@ -453,7 +479,7 @@ app.post(["/estimate", "/api/estimate"], (req, res) => {
 });
 
 app.get("/comps", (req, res) => {
-  if (!vehicleDb) {
+  if (!req.marketDatabase) {
     return res.status(503).json({
       error: "Cenova databaze neni na serveru nastavena.",
       items: [],
@@ -462,7 +488,7 @@ app.get("/comps", (req, res) => {
 
   try {
     const limit = req.query.limit ? Number(req.query.limit) : 12;
-    return res.json(vehicleDb.findComps(req.query || {}, limit));
+    return res.json(req.marketDatabase.findComps(req.query || {}, limit));
   } catch (error) {
     return res.status(500).json({
       error: error.message,

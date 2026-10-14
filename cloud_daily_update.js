@@ -1044,6 +1044,8 @@ async function refreshDailyExistingPrices(db, liveIndex, bazosLiveIndex, bazosSc
 }
 
 async function main() {
+  if ((process.env.CARPRICE_MARKET || 'CZ') !== 'CZ')
+    throw new Error('The Czech importer requires CARPRICE_MARKET=CZ');
   const startedAt = new Date().toISOString();
   const repoDir = prepareRepo();
   const dbPath = process.env.CLOUD_UPDATE_DB_PATH
