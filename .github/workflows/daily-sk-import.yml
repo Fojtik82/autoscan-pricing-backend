@@ -3,6 +3,12 @@ on:
   schedule:
     - cron: '0 4 * * *'
   workflow_dispatch:
+    inputs:
+      details_per_source:
+        description: Maximum listing details per source in this run
+        required: false
+        default: '5000'
+        type: string
 permissions:
   contents: write
 concurrency:
@@ -10,6 +16,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   update-sk:
+    if: github.repository == 'Fojtik82/autoscan-pricing-backend' && github.event.repository.private == false
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:
@@ -23,7 +30,7 @@ jobs:
       - name: Import Slovak listings into the Slovak database only
         env:
           CARPRICE_MARKET: SK
-          SK_MAX_DETAILS_PER_SOURCE: '5000'
+          SK_MAX_DETAILS_PER_SOURCE: ${{ inputs.details_per_source || '5000' }}
           SK_REQUEST_DELAY_MS: '600'
         run: npm run cloud:update:sk
       - name: Publish SK database archive
