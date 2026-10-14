@@ -1,0 +1,117 @@
+{
+  "market": "SK",
+  "currency": "EUR",
+  "updated_at": "2026-10-14T10:55:48.353Z",
+  "complete": false,
+  "blocked": false,
+  "sources": [
+    {
+      "source": "autobazar_eu",
+      "phase": "index",
+      "index_complete": false,
+      "sitemaps_remaining": 8,
+      "discovered": 33564,
+      "counts": {
+        "pending": 33564
+      },
+      "records": [
+        {
+          "vehicle_type": null,
+          "count": 54
+        },
+        {
+          "vehicle_type": "commercial",
+          "count": 1
+        },
+        {
+          "vehicle_type": "motorcycle",
+          "count": 1
+        },
+        {
+          "vehicle_type": "passenger",
+          "count": 1
+        }
+      ],
+      "last_error": null,
+      "started_at": "2026-10-14T10:53:40.814Z",
+      "completed_at": null
+    },
+    {
+      "source": "autovia",
+      "phase": "index",
+      "index_complete": false,
+      "sitemaps_remaining": 4,
+      "discovered": 21896,
+      "counts": {
+        "pending": 21896
+      },
+      "records": [
+        {
+          "vehicle_type": null,
+          "count": 61
+        },
+        {
+          "vehicle_type": "commercial",
+          "count": 1
+        },
+        {
+          "vehicle_type": "motorcycle",
+          "count": 1
+        },
+        {
+          "vehicle_type": "passenger",
+          "count": 1
+        }
+      ],
+      "last_error": null,
+      "started_at": "2026-10-14T10:53:40.833Z",
+      "completed_at": null
+    },
+    {
+      "source": "bazos_moto_sk",
+      "phase": "index",
+      "index_complete": false,
+      "sitemaps_remaining": 953,
+      "discovered": 2940,
+      "counts": {
+        "pending": 2940
+      },
+      "records": [
+        {
+          "vehicle_type": "motorcycle",
+          "count": 1
+        }
+      ],
+      "last_error": null,
+      "started_at": "2026-10-14T10:53:40.843Z",
+      "completed_at": null
+    },
+    {
+      "source": "bazos_sk",
+      "phase": "index",
+      "index_complete": false,
+      "sitemaps_remaining": 5246,
+      "discovered": 2922,
+      "counts": {
+        "pending": 2922
+      },
+      "records": [
+        {
+          "vehicle_type": null,
+          "count": 117
+        },
+        {
+          "vehicle_type": "commercial",
+          "count": 1
+        },
+        {
+          "vehicle_type": "passenger",
+          "count": 1
+        }
+      ],
+      "last_error": null,
+      "started_at": "2026-10-14T10:53:40.799Z",
+      "completed_at": null
+    }
+  ]
+}

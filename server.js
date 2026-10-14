@@ -75,10 +75,15 @@ app.use(['/price/estimate', '/estimate', '/api/estimate', '/comps', '/market/sta
   } catch (error) { return res.status(400).json({ error: error.message }); }
 });
 
-app.get('/market/status', (req, res) => res.json({
-  market: req.marketCode, currency: req.marketCode === 'SK' ? 'EUR' : 'CZK',
-  ...req.marketDatabase.health(),
-}));
+app.get('/market/status', (req, res) => {
+  let importStatus = null;
+  if (req.marketCode === 'SK') {
+    try { importStatus = JSON.parse(fs.readFileSync(path.join(path.dirname(VEHICLES_DB_PATH),'sk-import-status.json'),'utf8')); }
+    catch { /* The initial deployment can predate the first full crawl. */ }
+  }
+  res.json({market:req.marketCode,currency:req.marketCode === 'SK'?'EUR':'CZK',
+    ...req.marketDatabase.health(),...(importStatus?{import_status:importStatus}:{})});
+});
 
 
 // Export only public listing fields, never VIN cache or search-log data.

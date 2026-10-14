@@ -23,7 +23,7 @@ export function parseNicheListing(value) {
 
 export function marketSourceId(url, sourceDb = "") {
   const sk = parseSkListing(url);
-  if (sk) return sk.source;
+  if (sk) return sk.source === 'bazos_moto_sk' ? 'bazos_sk' : sk.source;
   if (parseSautoListingId(url)) return "sauto";
   if (parseBazosListing(url)) return "bazos";
   const niche = parseNicheListing(url);

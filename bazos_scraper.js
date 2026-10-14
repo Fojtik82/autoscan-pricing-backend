@@ -331,7 +331,7 @@ export function parseBazosDetail(html, candidate, taxonomy, scrapedAt = new Date
   const brand = inferBrand(title, description, candidate.category, taxonomy);
   const model = inferModel(title, brand, taxonomy);
   const year = extractYear(text);
-  if (!sourceUrl || !title || !price || !brand || !model || !year) return null;
+  if (!sourceUrl || !title || !price || !brand || !model || (!year && !candidate.allowIncomplete)) return null;
 
   const fuel = extractFuel(text, candidate.category);
   const transmission = extractTransmission(text);
@@ -347,7 +347,7 @@ export function parseBazosDetail(html, candidate, taxonomy, scrapedAt = new Date
   return {
     brand,
     model,
-    year: String(year),
+    year: year ? String(year) : null,
     mileage: extractMileage(text)?.toString() || null,
     fuel,
     motor,

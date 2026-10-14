@@ -4,13 +4,15 @@ on:
     - cron: '0 4 * * *'
   workflow_dispatch:
     inputs:
-      details_per_source:
-        description: Maximum listing details per source in this run
+      mode:
+        description: Full catalogue or daily refresh (both resume unfinished work)
         required: false
-        default: '5000'
-        type: string
+        default: full
+        type: choice
+        options: [full, daily]
 permissions:
   contents: write
+  actions: write
 concurrency:
   group: carprice-sk-database
   cancel-in-progress: false
@@ -27,19 +29,31 @@ jobs:
         with:
           node-version: '20'
       - run: npm install --no-audit --no-fund --package-lock=false
-      - name: Import Slovak listings into the Slovak database only
+      - name: Resume all Slovak cars, motorcycles and commercial vehicles with equipment
+        id: import
         env:
           CARPRICE_MARKET: SK
-          SK_MAX_DETAILS_PER_SOURCE: ${{ inputs.details_per_source || '5000' }}
-          SK_REQUEST_DELAY_MS: '600'
-        run: npm run cloud:update:sk
-      - name: Publish SK database archive
+          SK_RUN_MINUTES: '210'
+          SK_REFRESH_COMPLETED: ${{ github.event_name == 'schedule' && '1' || inputs.mode == 'daily' && '1' || '0' }}
+        run: npm run cloud:full:sk
+      - name: Publish only SK database and import progress
         run: |
           git config user.name 'CarPrice SK DB Bot'
           git config user.email 'carprice-sk-db-bot@users.noreply.github.com'
-          git add data/vehicles_sk.db.gz
+          git add -A -- 'data/vehicles_sk.db.gz*' data/sk-import-status.json
           if ! git diff --cached --quiet; then
-            git commit -m 'Update Slovakia vehicle database'
+            git commit -m 'Checkpoint Slovakia full vehicle import'
             git pull --rebase origin codex/slovakia-backend
             git push origin HEAD:codex/slovakia-backend
           fi
+      - name: Continue unfinished catalogue automatically
+        if: steps.import.outputs.complete == 'false' && steps.import.outputs.blocked == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run daily-sk-import.yml --repo Fojtik82/autoscan-pricing-backend --ref main -f mode=full
+      - name: Report source access failure after saving progress
+        if: steps.import.outputs.blocked == 'true'
+        run: |
+          cat data/sk-import-status.json
+          echo 'Import checkpoint saved; a source needs retry. No catalogue completeness claimed.' >&2
+          exit 1

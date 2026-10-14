@@ -8,7 +8,9 @@ import { compressVehicleDatabase, ensureVehicleDatabase } from './vehicle_db_arc
 
 const FIELDS = ['brand','model','year','mileage','fuel','motor','price','transmission','drive','vin','kw','body',
   'source_url','source_db','source_id','market','currency','title','brand_norm','model_norm','fuel_norm',
-  'transmission_norm','drive_norm','motor_norm','trim_norm','last_seen_at','last_checked_at','missing_since','inactive_at'];
+  'transmission_norm','drive_norm','motor_norm','trim_norm','last_seen_at','last_checked_at','missing_since','inactive_at',
+  'vehicle_type','category','description','equipment','other_equipment','equipment_json','equipment_ids_json',
+  'equipment_source','color','seats','doors','engine_ccm','engine_l','condition','emission_standard','additional_information','listing_status'];
 
 export function createSkDatabase(filename) {
   fs.mkdirSync(path.dirname(path.resolve(filename)), { recursive: true });
@@ -26,6 +28,8 @@ export function createSkDatabase(filename) {
     CREATE INDEX IF NOT EXISTS sk_vehicle_search ON vehicle_app(brand_norm,model_norm,year);
     CREATE TABLE IF NOT EXISTS sk_source_runs (source TEXT PRIMARY KEY, checked_at TEXT,
       index_count INTEGER, index_complete INTEGER, parsed_count INTEGER, detail_errors INTEGER);`);
+  const columns = new Set(db.prepare('PRAGMA table_info(vehicle_app)').all().map(c => c.name));
+  for (const field of FIELDS) if (!columns.has(field)) db.exec(`ALTER TABLE vehicle_app ADD COLUMN ${field} TEXT`);
   return db;
 }
 
@@ -38,7 +42,8 @@ export function saveSkRows(db, rows) {
     for (const row of rows) {
       const identity = parseSkListing(row.source_url);
       if (!identity || identity.source !== row.source_db || identity.id !== row.source_id ||
-          row.market !== 'SK' || row.currency !== 'EUR' || !Number.isFinite(Number(row.price)) || Number(row.price) < 100)
+          row.market !== 'SK' || row.currency !== 'EUR' ||
+          (row.price !== null && (!Number.isFinite(Number(row.price)) || Number(row.price) < 100)))
         throw new Error('Invalid SK record');
       put.run(Object.fromEntries(fields.map(f => [f, row[f] ?? null])));
     }
@@ -61,8 +66,8 @@ export function reconcileSkMissing(db, source, liveIds, { complete, now, thresho
   return marked;
 }
 
-const relevantSitemap = (source, url) => source.id === 'bazos_sk' ||
-  /sitemap-listings-(?:osobne-vozidla|suv-terenne-vozidla|uzitkove-vozidla-do-3-5t|motocykle|veterany)/.test(new URL(url).pathname);
+export const relevantSitemap = (source, url) => source.id.startsWith('bazos_') ||
+  /sitemap-listings-(?:osobne-vozidla|suv-terenne-vozidla|uzitkove-vozidla-do-3-5t|motocykle|veterany|vodne-snezne-skutre-stvorkolky|nakladne-vozidla-3-5-7-5t|nakladne-vozidla-nad-7-5t|tahace-a-kamiony|autobusy|obytne-privesy-autokaravany-bufety)-sk(?:-\d+)?\.xml$/.test(new URL(url).pathname);
 
 export async function discoverSkListings(source, read, { maxSitemaps = 500 } = {}) {
   const queue = [`https://${source.host}${source.sitemap}`];
@@ -145,7 +150,7 @@ async function main() {
   if (process.env.CARPRICE_MARKET && process.env.CARPRICE_MARKET !== 'SK')
     throw new Error('The SK importer requires CARPRICE_MARKET=SK');
   const filename = path.resolve(process.env.SK_VEHICLES_DB_PATH ?? './data/vehicles_sk.db');
-  if (fs.existsSync(filename + '.gz')) await ensureVehicleDatabase(filename);
+  if (fs.existsSync(filename + '.gz') || fs.existsSync(filename + '.gz.parts.json')) await ensureVehicleDatabase(filename);
   const db = createSkDatabase(filename);
   const dryRun = process.argv.includes('--dry-run');
   const taxonomyRows = db.prepare('SELECT DISTINCT brand,model FROM vehicle_app').all();

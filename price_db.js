@@ -139,6 +139,9 @@ function rowToVehicle(row, currency = 'CZK') {
     kw: kw ? Math.round(kw) : null,
     price_czk: price,
     title: row.title || "",
+    description: row.description || '', equipment: row.equipment || '',
+    other_equipment: row.other_equipment || '', equipment_json: row.equipment_json || '[]',
+    vehicle_type: row.vehicle_type || '', category: row.category || '',
     source_db: row.source_db || "",
     vin: row.vin || '',
   };
@@ -323,6 +326,7 @@ export function initVehicleDb(dbPath, { market = 'CZ' } = {}) {
   function marketWhere(where) {
     if (market === 'SK') return where + ` AND market='SK' AND currency='EUR'
       AND (source_url LIKE 'https://auto.bazos.sk/inzerat/%'
+        OR source_url LIKE 'https://motocykle.bazos.sk/inzerat/%'
         OR source_url LIKE 'https://www.autobazar.eu/detail/%'
         OR source_url LIKE 'https://www.autobazar.eu/detail-nove-auto/%'
         OR source_url LIKE 'https://www.autovia.sk/detail/%'
@@ -367,7 +371,8 @@ export function initVehicleDb(dbPath, { market = 'CZ' } = {}) {
           `
           SELECT
             brand, model, year, mileage, fuel, motor, price, transmission, drive,
-            source_url, source_db, title, kw, ${columns.has('vin') ? 'vin' : 'NULL AS vin'}
+            source_url, source_db, title, kw, ${columns.has('vin') ? 'vin' : 'NULL AS vin'},
+            ${['description','equipment','other_equipment','equipment_json','vehicle_type','category'].map(c => columns.has(c) ? c : `NULL AS ${c}`).join(',')}
           FROM ${JSON.stringify(table)}
           WHERE ${marketWhere(where)}
           LIMIT @limit
@@ -508,7 +513,10 @@ export function initVehicleDb(dbPath, { market = 'CZ' } = {}) {
       drive: vehicle.drive,
       kw: vehicle.kw,
       ...(market === 'CZ' ? { price_czk: vehicle.price_czk }
-        : { price: vehicle.price_czk, currency, market }),
+        : { price: vehicle.price_czk, currency, market, title: vehicle.title,
+            vehicle_type: vehicle.vehicle_type, category: vehicle.category,
+            description: vehicle.description, equipment: vehicle.equipment,
+            other_equipment: vehicle.other_equipment, equipment_json: vehicle.equipment_json }),
       scraped_at: vehicle.source_db,
     }));
   }

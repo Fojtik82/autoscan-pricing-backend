@@ -5,3 +5,4 @@ vin_cache.db-shm
 vin_cache.db-wal
 npm-debug.log*
 data/vehicles_ai.db
+data/vehicles_sk.db

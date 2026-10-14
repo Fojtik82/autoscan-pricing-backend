@@ -10,7 +10,8 @@
     "start": "node server.js",
     "test": "node --test",
     "cloud:update": "node cloud_daily_update.js",
-    "cloud:update:sk": "node sk_import.js"
+    "cloud:update:sk": "node sk_import.js",
+    "cloud:full:sk": "node sk_full_import.js"
   },
   "dependencies": {
     "better-sqlite3": "11.5.0",

@@ -38,7 +38,7 @@ test('embedded portal data validates identity and full purchase price', () => {
   const row = parseSkDetail(page('Aa', 14990),url('Aa'));
   assert.equal(row.price,'14990'); assert.equal(row.currency,'EUR');
   assert.equal(parseSkDetail(page('Bb'),url('Aa')),null);
-  assert.equal(parseSkDetail(page('Aa',0),url('Aa')),null);
+  assert.equal(parseSkDetail(page('Aa',0),url('Aa')).price,null);
   assert.equal(parseSkDetail(page('Aa').replace('"finalPrice":15000','"priceCurrency":"CZK","finalPrice":15000'),url('Aa')),null);
 });
 test('SK estimates use EUR, exclude stale/CZ rows and deduplicate shared vehicles', t => {
