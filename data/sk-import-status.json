@@ -1,21 +1,20 @@
 {
   "market": "SK",
   "currency": "EUR",
-  "updated_at": "2026-10-14T21:29:00.056Z",
+  "updated_at": "2026-10-15T01:00:00.025Z",
   "complete": false,
   "blocked": false,
   "sources": [
     {
       "source": "autobazar_eu",
-      "phase": "details",
+      "phase": "complete",
       "index_complete": true,
       "sitemaps_remaining": 0,
       "discovered": 52110,
       "counts": {
-        "done": 47878,
-        "error": 6,
+        "done": 47882,
         "gone": 313,
-        "rejected": 3913
+        "rejected": 3915
       },
       "records": [
         {
@@ -32,12 +31,12 @@
         },
         {
           "vehicle_type": "passenger",
-          "count": 42933
+          "count": 42937
         }
       ],
       "last_error": null,
       "started_at": "2026-10-14T10:53:40.814Z",
-      "completed_at": null
+      "completed_at": "2026-10-14T21:30:06.645Z"
     },
     {
       "source": "autovia",
@@ -100,23 +99,23 @@
       "sitemaps_remaining": 0,
       "discovered": 107530,
       "counts": {
-        "done": 41306,
-        "gone": 8,
-        "pending": 50306,
-        "rejected": 15910
+        "done": 56839,
+        "gone": 12,
+        "pending": 29639,
+        "rejected": 21040
       },
       "records": [
         {
           "vehicle_type": null,
-          "count": 113
+          "count": 101
         },
         {
           "vehicle_type": "commercial",
-          "count": 4299
+          "count": 5637
         },
         {
           "vehicle_type": "passenger",
-          "count": 37009
+          "count": 51204
         }
       ],
       "last_error": null,
