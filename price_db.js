@@ -375,6 +375,7 @@ export function initVehicleDb(dbPath, { market = 'CZ' } = {}) {
             ${['description','equipment','other_equipment','equipment_json','vehicle_type','category'].map(c => columns.has(c) ? c : `NULL AS ${c}`).join(',')}
           FROM ${JSON.stringify(table)}
           WHERE ${marketWhere(where)}
+          ${market === 'SK' ? 'ORDER BY rowid' : ''}
           LIMIT @limit
           `,
         )

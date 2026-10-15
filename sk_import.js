@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { makeReader } from './niche_sources.js';
 import { SK_SOURCES, parseSkListing, sitemapLocations, parseSkDetail, skDetailGone } from './sk_sources.js';
 import { compressVehicleDatabase, ensureVehicleDatabase } from './vehicle_db_archive.js';
+import { createSkSearchIndexes } from './sk_search_indexes.js';
 
 const FIELDS = ['brand','model','year','mileage','fuel','motor','price','transmission','drive','vin','kw','body',
   'source_url','source_db','source_id','market','currency','title','brand_norm','model_norm','fuel_norm',
@@ -30,6 +31,7 @@ export function createSkDatabase(filename) {
       index_count INTEGER, index_complete INTEGER, parsed_count INTEGER, detail_errors INTEGER);`);
   const columns = new Set(db.prepare('PRAGMA table_info(vehicle_app)').all().map(c => c.name));
   for (const field of FIELDS) if (!columns.has(field)) db.exec(`ALTER TABLE vehicle_app ADD COLUMN ${field} TEXT`);
+  createSkSearchIndexes(db);
   return db;
 }
 

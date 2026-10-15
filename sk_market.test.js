@@ -8,6 +8,7 @@ import { createSkDatabase, saveSkRows, reconcileSkMissing, discoverSkListings, u
 import { initVehicleDb } from './price_db.js';
 import { requestedMarket } from './market_routing.js';
 import { robotsPolicy } from './niche_sources.js';
+import { prepareSkSearchIndexes } from './sk_search_indexes.js';
 
 const url = id => `https://www.autobazar.eu/detail/skoda-octavia/${id}/`;
 const page = (id, price = 15000) => `<html lang="sk"><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({props:{pageProps:{statusCode:200,advertisement:{id,
@@ -21,6 +22,29 @@ function fixture(t) {
   t.after(() => { for (const r of readers) r.close(); db.close(); fs.rmSync(dir,{recursive:true,force:true,maxRetries:5,retryDelay:100}); });
   return { db, filename, readers };
 }
+
+test('SK index migration avoids a full scan and preserves legacy brand fallback', t => {
+  const {db,filename,readers} = fixture(t);
+  saveSkRows(db, [10000,15000,20000].map((p,i) => ({
+    ...parseSkDetail(page('Index'+i,p),url('Index'+i)),
+    brand_norm: i === 0 ? '' : 'skoda',
+  })));
+  db.exec('DROP INDEX sk_vehicle_brand_lower');
+  const query = "SELECT rowid FROM vehicle_app WHERE brand_norm=? OR lower(brand)=?";
+  const oldRows = db.prepare(query).all('skoda','skoda');
+  const oldPlan = db.prepare('EXPLAIN QUERY PLAN '+query).all('skoda','skoda');
+  assert.ok(oldPlan.some(row => row.detail.includes('SCAN')));
+  prepareSkSearchIndexes(filename);
+  prepareSkSearchIndexes(filename); // Safe on every deployment.
+  assert.deepEqual(db.prepare(query).all('skoda','skoda').sort((a,b)=>a.rowid-b.rowid),oldRows);
+  const plan = db.prepare('EXPLAIN QUERY PLAN '+query).all('skoda','skoda');
+  assert.ok(plan.some(row => row.detail.includes('sk_vehicle_search')));
+  assert.ok(plan.some(row => row.detail.includes('sk_vehicle_brand_lower')));
+  assert.equal(plan.some(row => row.detail.includes('SCAN')),false);
+  const sk = initVehicleDb(filename,{market:'SK'}); readers.push(sk);
+  assert.equal(sk.estimatePrice({brand:'Skoda',model:'Octavia',year:2020}).count,3);
+  assert.equal(sk.estimatePrice({brand:'Skoda',model:'Octavia',year:2020}).price,15000);
+});
 test('strict market and listing identities reject foreign and malicious hosts', () => {
   assert.equal(requestedMarket({}), 'CZ');
   assert.equal(requestedMarket({market:'sk'}), 'SK');

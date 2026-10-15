@@ -17,6 +17,7 @@ import { initSearchLogsDb } from "./search_logs.js";
 import { initVehicleIngestDb, isAuthorizedIngestRequest } from "./vehicle_ingest.js";
 import { normalizeVin, validateVin } from "./vin.js";
 import { ensureVehicleDatabase } from "./vehicle_db_archive.js";
+import { prepareSkSearchIndexes } from './sk_search_indexes.js';
 import { loadProviderEnvironment, createVehicleProvider, registerVehicleProvider } from "./vehicle_provider.js";
 
 const PORT = Number(process.env.PORT || 3000);
@@ -54,6 +55,7 @@ let vehicleIngestDb = null;
 
 try {
   await ensureVehicleDatabase(VEHICLES_DB_PATH);
+  if (SERVER_MARKET === 'SK') prepareSkSearchIndexes(VEHICLES_DB_PATH);
   vehicleDb = initVehicleDb(VEHICLES_DB_PATH, { market: SERVER_MARKET });
   if (VEHICLE_INGEST_API_KEY && SERVER_MARKET === 'CZ') vehicleIngestDb = initVehicleIngestDb(VEHICLES_DB_PATH);
   console.log("Vehicle price DB loaded", vehicleDb.health());
@@ -84,7 +86,6 @@ app.get('/market/status', (req, res) => {
   res.json({market:req.marketCode,currency:req.marketCode === 'SK'?'EUR':'CZK',
     ...req.marketDatabase.health(),...(importStatus?{import_status:importStatus}:{})});
 });
-
 
 // Export only public listing fields, never VIN cache or search-log data.
 // This snapshot covers known ads confirmed in the latest complete source index;
