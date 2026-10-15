@@ -541,6 +541,9 @@ export function initVehicleDb(dbPath, { market = 'CZ' } = {}) {
       active_count: supportsActiveFlag ? count.active_count : count.count,
       inactive_count: supportsActiveFlag ? count.inactive_count : 0,
       active_filter: supportsActiveFlag,
+      ...(market === 'SK' ? { search_index_ready: Boolean(db.prepare(
+        "SELECT 1 FROM sqlite_master WHERE type='index' AND name='sk_vehicle_brand_lower'"
+      ).get()) } : {}),
     };
   }
 

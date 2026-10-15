@@ -42,6 +42,7 @@ test('SK index migration avoids a full scan and preserves legacy brand fallback'
   assert.ok(plan.some(row => row.detail.includes('sk_vehicle_brand_lower')));
   assert.equal(plan.some(row => row.detail.includes('SCAN')),false);
   const sk = initVehicleDb(filename,{market:'SK'}); readers.push(sk);
+  assert.equal(sk.health().search_index_ready,true);
   assert.equal(sk.estimatePrice({brand:'Skoda',model:'Octavia',year:2020}).count,3);
   assert.equal(sk.estimatePrice({brand:'Skoda',model:'Octavia',year:2020}).price,15000);
 });
