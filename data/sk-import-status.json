@@ -1,21 +1,20 @@
 {
   "market": "SK",
   "currency": "EUR",
-  "updated_at": "2026-10-16T18:14:37.290Z",
+  "updated_at": "2026-10-16T21:46:03.392Z",
   "complete": false,
   "blocked": false,
   "sources": [
     {
       "source": "autobazar_eu",
-      "phase": "details",
+      "phase": "complete",
       "index_complete": true,
       "sitemaps_remaining": 0,
       "discovered": 52368,
       "counts": {
-        "done": 48199,
-        "error": 6,
+        "done": 48203,
         "gone": 295,
-        "rejected": 3868
+        "rejected": 3870
       },
       "records": [
         {
@@ -37,7 +36,7 @@
       ],
       "last_error": null,
       "started_at": "2026-10-16T07:41:42.593Z",
-      "completed_at": null
+      "completed_at": "2026-10-16T18:16:12.806Z"
     },
     {
       "source": "autovia",
@@ -100,19 +99,19 @@
       "sitemaps_remaining": 0,
       "discovered": 107479,
       "counts": {
-        "done": 41507,
-        "gone": 4,
-        "pending": 50147,
-        "rejected": 15821
+        "done": 57006,
+        "gone": 9,
+        "pending": 29527,
+        "rejected": 20937
       },
       "records": [
         {
           "vehicle_type": "commercial",
-          "count": 7590
+          "count": 7587
         },
         {
           "vehicle_type": "passenger",
-          "count": 72837
+          "count": 72878
         }
       ],
       "last_error": null,
