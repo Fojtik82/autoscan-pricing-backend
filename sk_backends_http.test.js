@@ -9,6 +9,7 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { createSkDatabase, saveSkRows } from './sk_import.js';
 import { parseSkDetail } from './sk_sources.js';
+import Database from 'better-sqlite3';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 async function freePort() {
@@ -20,8 +21,10 @@ test('two independent HTTP backends refuse the other market and keep their own p
   const children=[];
   try {
     const urls={};
+    const filenames={};
     for(const market of ['CZ','SK']) {
       const filename=path.join(directory,market+'.db');
+      filenames[market]=filename;
       const db=createSkDatabase(filename);
       for(let i=0;i<3;i++) {
         const id='A'+i;
@@ -51,6 +54,22 @@ test('two independent HTTP backends refuse the other market and keep their own p
       if(market==='SK') {
         assert.equal(metadata.vehicleDbReady,true);
         assert.equal(metadata.vehicleDb,undefined); // No full catalogue count in port probes.
+        const writer=new Database(filenames[market],{fileMustExist:true});
+        writer.exec('BEGIN EXCLUSIVE');
+        let waiting;
+        try {
+          waiting=fetch(urls[market]+'/market/status?market=SK', {signal:AbortSignal.timeout(5000)});
+          waiting.catch(()=>{});
+          await new Promise(resolve=>setTimeout(resolve,40));
+          const concurrentHealth=await fetch(urls[market]+'/healthz', {signal:AbortSignal.timeout(2000)});
+          assert.equal(concurrentHealth.status,200); // Render probes stay responsive while SQL waits.
+          writer.exec('COMMIT');
+          assert.equal((await waiting).status,200);
+        } finally {
+          if(writer.inTransaction)writer.exec('ROLLBACK');
+          if(waiting)await waiting.catch(()=>{});
+          writer.close();
+        }
       } else assert.equal(metadata.vehicleDb.count,3);
       const health = await fetch(urls[market]+'/healthz');
       assert.equal(health.status,200);

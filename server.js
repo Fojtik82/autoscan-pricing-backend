@@ -18,6 +18,7 @@ import { initVehicleIngestDb, isAuthorizedIngestRequest } from "./vehicle_ingest
 import { normalizeVin, validateVin } from "./vin.js";
 import { ensureVehicleDatabase } from "./vehicle_db_archive.js";
 import { prepareSkSearchIndexes } from './sk_search_indexes.js';
+import { initSkPriceClient } from './sk_price_client.js';
 import { loadProviderEnvironment, createVehicleProvider, registerVehicleProvider } from "./vehicle_provider.js";
 
 const PORT = Number(process.env.PORT || 3000);
@@ -56,9 +57,12 @@ let vehicleIngestDb = null;
 try {
   await ensureVehicleDatabase(VEHICLES_DB_PATH);
   if (SERVER_MARKET === 'SK') prepareSkSearchIndexes(VEHICLES_DB_PATH);
-  vehicleDb = initVehicleDb(VEHICLES_DB_PATH, { market: SERVER_MARKET });
+  vehicleDb = SERVER_MARKET === 'SK'
+    ? await initSkPriceClient(VEHICLES_DB_PATH)
+    : initVehicleDb(VEHICLES_DB_PATH, { market: SERVER_MARKET });
   if (VEHICLE_INGEST_API_KEY && SERVER_MARKET === 'CZ') vehicleIngestDb = initVehicleIngestDb(VEHICLES_DB_PATH);
-  console.log("Vehicle price DB loaded", vehicleDb.health());
+  console.log("Vehicle price DB loaded", SERVER_MARKET === 'SK'
+    ? { market: 'SK', workerReady: vehicleDb.ready } : vehicleDb.health());
 } catch (error) {
   console.error("Vehicle price DB was not loaded:", error.message);
 }
@@ -69,7 +73,7 @@ app.use(['/price/estimate', '/estimate', '/api/estimate', '/comps', '/market/sta
     if (market !== SERVER_MARKET) return res.status(409).json({
       found: false, error: 'wrong_market_backend', market: SERVER_MARKET,
     });
-    if (!vehicleDb) return res.status(503).json({ found: false, market,
+    if (!vehicleDb || vehicleDb.ready === false) return res.status(503).json({ found: false, market,
       currency: market === 'SK' ? 'EUR' : 'CZK', error: 'market_database_unavailable' });
     req.marketDatabase = vehicleDb;
     req.marketCode = SERVER_MARKET;
@@ -77,15 +81,18 @@ app.use(['/price/estimate', '/estimate', '/api/estimate', '/comps', '/market/sta
   } catch (error) { return res.status(400).json({ error: error.message }); }
 });
 
-app.get('/market/status', (req, res) => {
+app.get('/market/status', async (req, res) => {
   let importStatus = null;
   if (req.marketCode === 'SK') {
     try { importStatus = JSON.parse(fs.readFileSync(path.join(path.dirname(VEHICLES_DB_PATH),'sk-import-status.json'),'utf8')); }
     catch { /* The initial deployment can predate the first full crawl. */ }
   }
-  res.json({market:req.marketCode,currency:req.marketCode === 'SK'?'EUR':'CZK',
-    ...req.marketDatabase.health(),...(importStatus?{import_status:importStatus}:{})});
+  try {
+    res.json({market:req.marketCode,currency:req.marketCode === 'SK'?'EUR':'CZK',
+      ...await req.marketDatabase.health(),...(importStatus?{import_status:importStatus}:{})});
+  } catch (error) { res.status(503).json({error:error.message}); }
 });
+
 
 // Export only public listing fields, never VIN cache or search-log data.
 // This snapshot covers known ads confirmed in the latest complete source index;
@@ -355,45 +362,47 @@ app.get("/", (_req, res) => {
     service: "AutoScan Pricing Backend",
     version: "2.0.0",
     ...(SERVER_MARKET === 'SK'
-      ? { market: SERVER_MARKET, currency: 'EUR', vehicleDbReady: Boolean(vehicleDb) }
+      ? { market: SERVER_MARKET, currency: 'EUR', vehicleDbReady: Boolean(vehicleDb) && vehicleDb.ready !== false }
       : { vehicleDb: vehicleDb ? vehicleDb.health() : null }),
   });
 });
 
-app.get("/health", (_req, res) => {
-  res.json({
+app.get("/health", async (_req, res) => {
+  try { res.json({
     ok: true,
     market: SERVER_MARKET,
     currency: SERVER_MARKET === 'SK' ? 'EUR' : 'CZK',
     ts: Date.now(),
-    vehicleDb: vehicleDb ? vehicleDb.health() : null,
-  });
+    vehicleDb: vehicleDb ? await vehicleDb.health() : null,
+  }); } catch (error) { res.status(503).json({ok:false,error:error.message}); }
 });
 
 app.get("/healthz", (_req, res) => {
-  res.status(vehicleDb ? 200 : 503).json({
+  const ready = Boolean(vehicleDb) && vehicleDb.ready !== false;
+  res.status(ready ? 200 : 503).json({
     status: "ok",
     market: SERVER_MARKET,
     currency: SERVER_MARKET === 'SK' ? 'EUR' : 'CZK',
     ts: Date.now(),
-    vehicleDbReady: Boolean(vehicleDb),
+    vehicleDbReady: ready,
   });
 });
 
-app.get("/price/health", (_req, res) => {
+app.get("/price/health", async (_req, res) => {
   if (!vehicleDb) {
     return res.status(503).json({
       ok: false,
       error: "VEHICLES_DB_PATH neni nastaven nebo databaze nejde otevrit.",
     });
   }
-  return res.json(vehicleDb.health());
+  try { return res.json(await vehicleDb.health()); }
+  catch (error) { return res.status(503).json({ok:false,error:error.message}); }
 });
 
-app.post("/price/estimate", (req, res) => {
+app.post("/price/estimate", async (req, res) => {
 
   try {
-    return res.json(req.marketDatabase.estimatePrice(req.body || {}));
+    return res.json(await req.marketDatabase.estimatePrice(req.body || {}));
   } catch (error) {
     return res.status(500).json({
       found: false,
@@ -471,11 +480,11 @@ app.post("/vehicle-ai/lookup", (req, res) => {
   }
 });
 
-app.post(["/estimate", "/api/estimate"], (req, res) => {
+app.post(["/estimate", "/api/estimate"], async (req, res) => {
 
   try {
     const payload = mapLegacyEstimatePayload(req.body || {});
-    const result = req.marketDatabase.estimatePrice(payload);
+    const result = await req.marketDatabase.estimatePrice(payload);
     if (req.marketCode === 'SK') return res.json(result);
     return res.json(legacyEstimateResponse(result, req.body || {}));
   } catch (error) {
@@ -486,7 +495,7 @@ app.post(["/estimate", "/api/estimate"], (req, res) => {
   }
 });
 
-app.get("/comps", (req, res) => {
+app.get("/comps", async (req, res) => {
   if (!req.marketDatabase) {
     return res.status(503).json({
       error: "Cenova databaze neni na serveru nastavena.",
@@ -496,7 +505,7 @@ app.get("/comps", (req, res) => {
 
   try {
     const limit = req.query.limit ? Number(req.query.limit) : 12;
-    return res.json(req.marketDatabase.findComps(req.query || {}, limit));
+    return res.json(await req.marketDatabase.findComps(req.query || {}, limit));
   } catch (error) {
     return res.status(500).json({
       error: error.message,
