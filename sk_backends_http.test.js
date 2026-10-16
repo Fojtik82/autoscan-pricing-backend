@@ -45,6 +45,16 @@ test('two independent HTTP backends refuse the other market and keep their own p
       assert.equal(ready,true,market+' backend starts');
     }
     for(const market of ['CZ','SK']) {
+      const probe = await fetch(urls[market]+'/');
+      assert.equal(probe.status,200);
+      const metadata = await probe.json();
+      if(market==='SK') {
+        assert.equal(metadata.vehicleDbReady,true);
+        assert.equal(metadata.vehicleDb,undefined); // No full catalogue count in port probes.
+      } else assert.equal(metadata.vehicleDb.count,3);
+      const health = await fetch(urls[market]+'/healthz');
+      assert.equal(health.status,200);
+      assert.equal((await health.json()).vehicleDbReady,true);
       const response=await fetch(urls[market]+'/price/estimate',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({market,brand:'Skoda',model:'Octavia',year:2020})});
       assert.equal(response.status,200);

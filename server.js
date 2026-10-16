@@ -354,7 +354,9 @@ app.get("/", (_req, res) => {
     ok: true,
     service: "AutoScan Pricing Backend",
     version: "2.0.0",
-    vehicleDb: vehicleDb ? vehicleDb.health() : null,
+    ...(SERVER_MARKET === 'SK'
+      ? { market: SERVER_MARKET, currency: 'EUR', vehicleDbReady: Boolean(vehicleDb) }
+      : { vehicleDb: vehicleDb ? vehicleDb.health() : null }),
   });
 });
 
@@ -551,6 +553,6 @@ app.get("/vin/decode/:vin", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`AutoScan Pricing Backend listening on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`AutoScan Pricing Backend listening on 0.0.0.0:${PORT}`);
 });
