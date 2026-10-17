@@ -1,7 +1,7 @@
 {
   "market": "SK",
   "currency": "EUR",
-  "updated_at": "2026-10-16T21:46:03.392Z",
+  "updated_at": "2026-10-17T01:17:28.605Z",
   "complete": false,
   "blocked": false,
   "sources": [
@@ -99,19 +99,19 @@
       "sitemaps_remaining": 0,
       "discovered": 107479,
       "counts": {
-        "done": 57006,
-        "gone": 9,
-        "pending": 29527,
-        "rejected": 20937
+        "done": 72969,
+        "gone": 14,
+        "pending": 9131,
+        "rejected": 25365
       },
       "records": [
         {
           "vehicle_type": "commercial",
-          "count": 7587
+          "count": 7588
         },
         {
           "vehicle_type": "passenger",
-          "count": 72878
+          "count": 72901
         }
       ],
       "last_error": null,
