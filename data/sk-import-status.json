@@ -1,7 +1,7 @@
 {
   "market": "SK",
   "currency": "EUR",
-  "updated_at": "2026-10-17T19:20:01.620Z",
+  "updated_at": "2026-10-17T22:51:33.668Z",
   "complete": false,
   "blocked": false,
   "sources": [
@@ -12,11 +12,10 @@
       "sitemaps_remaining": 0,
       "discovered": 52498,
       "counts": {
-        "done": 31626,
-        "error": 4,
-        "gone": 127,
-        "pending": 17279,
-        "rejected": 3462
+        "done": 48448,
+        "error": 3,
+        "gone": 188,
+        "rejected": 3859
       },
       "records": [
         {
@@ -25,15 +24,15 @@
         },
         {
           "vehicle_type": "commercial",
-          "count": 3866
+          "count": 3874
         },
         {
           "vehicle_type": "motorcycle",
-          "count": 1254
+          "count": 1255
         },
         {
           "vehicle_type": "passenger",
-          "count": 44844
+          "count": 45043
         }
       ],
       "last_error": null,
@@ -47,11 +46,10 @@
       "sitemaps_remaining": 0,
       "discovered": 30734,
       "counts": {
-        "done": 23080,
-        "error": 3,
-        "gone": 832,
-        "pending": 5630,
-        "rejected": 1189
+        "done": 28386,
+        "error": 7,
+        "gone": 983,
+        "rejected": 1358
       },
       "records": [
         {
@@ -60,15 +58,15 @@
         },
         {
           "vehicle_type": "commercial",
-          "count": 2421
+          "count": 2443
         },
         {
           "vehicle_type": "motorcycle",
-          "count": 913
+          "count": 914
         },
         {
           "vehicle_type": "passenger",
-          "count": 25990
+          "count": 26177
         }
       ],
       "last_error": null,
@@ -102,9 +100,10 @@
       "sitemaps_remaining": 0,
       "discovered": 107298,
       "counts": {
-        "done": 26310,
-        "pending": 70785,
-        "rejected": 10203
+        "done": 41440,
+        "gone": 3,
+        "pending": 50000,
+        "rejected": 15855
       },
       "records": [
         {
@@ -113,7 +112,7 @@
         },
         {
           "vehicle_type": "passenger",
-          "count": 77576
+          "count": 77587
         }
       ],
       "last_error": null,
