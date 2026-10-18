@@ -1,27 +1,22 @@
 {
   "market": "SK",
   "currency": "EUR",
-  "updated_at": "2026-10-17T22:51:33.668Z",
+  "updated_at": "2026-10-18T02:23:12.313Z",
   "complete": false,
   "blocked": false,
   "sources": [
     {
       "source": "autobazar_eu",
-      "phase": "details",
+      "phase": "complete",
       "index_complete": true,
       "sitemaps_remaining": 0,
       "discovered": 52498,
       "counts": {
-        "done": 48448,
-        "error": 3,
+        "done": 48451,
         "gone": 188,
         "rejected": 3859
       },
       "records": [
-        {
-          "vehicle_type": null,
-          "count": 1
-        },
         {
           "vehicle_type": "commercial",
           "count": 3874
@@ -37,25 +32,20 @@
       ],
       "last_error": null,
       "started_at": "2026-10-17T12:18:28.269Z",
-      "completed_at": null
+      "completed_at": "2026-10-17T22:53:17.634Z"
     },
     {
       "source": "autovia",
-      "phase": "details",
+      "phase": "complete",
       "index_complete": true,
       "sitemaps_remaining": 0,
       "discovered": 30734,
       "counts": {
-        "done": 28386,
-        "error": 7,
+        "done": 28393,
         "gone": 983,
         "rejected": 1358
       },
       "records": [
-        {
-          "vehicle_type": null,
-          "count": 38
-        },
         {
           "vehicle_type": "commercial",
           "count": 2443
@@ -71,7 +61,7 @@
       ],
       "last_error": null,
       "started_at": "2026-10-17T12:18:28.271Z",
-      "completed_at": null
+      "completed_at": "2026-10-17T22:53:21.529Z"
     },
     {
       "source": "bazos_moto_sk",
@@ -100,19 +90,19 @@
       "sitemaps_remaining": 0,
       "discovered": 107298,
       "counts": {
-        "done": 41440,
-        "gone": 3,
-        "pending": 50000,
-        "rejected": 15855
+        "done": 57402,
+        "gone": 7,
+        "pending": 29241,
+        "rejected": 20648
       },
       "records": [
         {
           "vehicle_type": "commercial",
-          "count": 7997
+          "count": 7999
         },
         {
           "vehicle_type": "passenger",
-          "count": 77587
+          "count": 77600
         }
       ],
       "last_error": null,
