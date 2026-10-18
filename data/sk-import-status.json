@@ -1,8 +1,8 @@
 {
   "market": "SK",
   "currency": "EUR",
-  "updated_at": "2026-10-18T05:54:44.268Z",
-  "complete": false,
+  "updated_at": "2026-10-18T07:24:28.053Z",
+  "complete": true,
   "blocked": false,
   "sources": [
     {
@@ -85,29 +85,28 @@
     },
     {
       "source": "bazos_sk",
-      "phase": "details",
+      "phase": "complete",
       "index_complete": true,
       "sitemaps_remaining": 0,
       "discovered": 107298,
       "counts": {
-        "done": 73890,
-        "gone": 8,
-        "pending": 8564,
-        "rejected": 24836
+        "done": 80718,
+        "gone": 11,
+        "rejected": 26569
       },
       "records": [
         {
           "vehicle_type": "commercial",
-          "count": 7998
+          "count": 8188
         },
         {
           "vehicle_type": "passenger",
-          "count": 77615
+          "count": 80645
         }
       ],
       "last_error": null,
       "started_at": "2026-10-17T12:18:26.380Z",
-      "completed_at": null
+      "completed_at": "2026-10-18T07:24:27.710Z"
     }
   ]
 }
