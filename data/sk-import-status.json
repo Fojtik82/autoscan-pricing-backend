@@ -1,77 +1,80 @@
 {
   "market": "SK",
   "currency": "EUR",
-  "updated_at": "2026-10-18T07:24:28.053Z",
-  "complete": true,
-  "blocked": false,
+  "updated_at": "2026-10-18T16:12:18.706Z",
+  "complete": false,
+  "blocked": true,
   "sources": [
     {
       "source": "autobazar_eu",
-      "phase": "complete",
+      "phase": "details",
       "index_complete": true,
       "sitemaps_remaining": 0,
-      "discovered": 52498,
+      "discovered": 52614,
       "counts": {
-        "done": 48451,
-        "gone": 188,
-        "rejected": 3859
+        "done": 15030,
+        "error": 7,
+        "gone": 68,
+        "pending": 35383,
+        "rejected": 2126
       },
       "records": [
         {
           "vehicle_type": "commercial",
-          "count": 3874
+          "count": 3879
         },
         {
           "vehicle_type": "motorcycle",
-          "count": 1255
+          "count": 1257
         },
         {
           "vehicle_type": "passenger",
-          "count": 45043
+          "count": 45176
         }
       ],
       "last_error": null,
-      "started_at": "2026-10-17T12:18:28.269Z",
-      "completed_at": "2026-10-17T22:53:17.634Z"
+      "started_at": "2026-10-18T12:42:21.031Z",
+      "completed_at": null
     },
     {
       "source": "autovia",
-      "phase": "complete",
+      "phase": "details",
       "index_complete": true,
       "sitemaps_remaining": 0,
-      "discovered": 30734,
+      "discovered": 30838,
       "counts": {
-        "done": 28393,
-        "gone": 983,
-        "rejected": 1358
+        "done": 11177,
+        "error": 3,
+        "gone": 558,
+        "pending": 18339,
+        "rejected": 761
       },
       "records": [
         {
           "vehicle_type": "commercial",
-          "count": 2443
+          "count": 2448
         },
         {
           "vehicle_type": "motorcycle",
-          "count": 914
+          "count": 916
         },
         {
           "vehicle_type": "passenger",
-          "count": 26177
+          "count": 26296
         }
       ],
       "last_error": null,
-      "started_at": "2026-10-17T12:18:28.271Z",
-      "completed_at": "2026-10-17T22:53:21.529Z"
+      "started_at": "2026-10-18T12:42:21.033Z",
+      "completed_at": null
     },
     {
       "source": "bazos_moto_sk",
-      "phase": "complete",
-      "index_complete": true,
-      "sitemaps_remaining": 0,
-      "discovered": 21785,
+      "phase": "blocked",
+      "index_complete": false,
+      "sitemaps_remaining": 1,
+      "discovered": 21823,
       "counts": {
-        "done": 15877,
-        "rejected": 5908
+        "pending": 21823
       },
       "records": [
         {
@@ -79,20 +82,20 @@
           "count": 17164
         }
       ],
-      "last_error": null,
-      "started_at": "2026-10-17T12:18:28.272Z",
-      "completed_at": "2026-10-17T16:09:34.502Z"
+      "last_error": "Sitemap HTTP 404",
+      "started_at": "2026-10-18T12:42:21.036Z",
+      "completed_at": null
     },
     {
       "source": "bazos_sk",
-      "phase": "complete",
+      "phase": "details",
       "index_complete": true,
       "sitemaps_remaining": 0,
-      "discovered": 107298,
+      "discovered": 107539,
       "counts": {
-        "done": 80718,
-        "gone": 11,
-        "rejected": 26569
+        "done": 11072,
+        "pending": 91963,
+        "rejected": 4504
       },
       "records": [
         {
@@ -101,12 +104,12 @@
         },
         {
           "vehicle_type": "passenger",
-          "count": 80645
+          "count": 80648
         }
       ],
       "last_error": null,
-      "started_at": "2026-10-17T12:18:26.380Z",
-      "completed_at": "2026-10-18T07:24:27.710Z"
+      "started_at": "2026-10-18T12:42:15.669Z",
+      "completed_at": null
     }
   ]
 }
