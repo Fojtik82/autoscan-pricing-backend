@@ -1,5 +1,6 @@
 import { decodeHtmlEntities, createBazosTaxonomy, parseBazosDetail } from './bazos_scraper.js';
 import fs from 'node:fs';
+import { normalizePowertrain } from './vehicle_variant.js';
 
 // Shared make/model names contain no price observations or market database.
 const genericTaxonomy = JSON.parse(fs.readFileSync(new URL('./vehicle_taxonomy.json', import.meta.url), 'utf8'));
@@ -202,7 +203,7 @@ export function parseSkDetail(html, url, taxonomyRows = emptyRows, now = new Dat
   }
   return { ...row, source_url: identity.url, source_db: identity.source,
     source_id: identity.id, market: 'SK', currency: 'EUR',
-    brand_norm: foldSk(row.brand), model_norm: foldSk(row.model), fuel_norm: foldSk(row.fuel),
+    brand_norm: foldSk(row.brand), model_norm: foldSk(row.model), fuel_norm: normalizePowertrain(row) || foldSk(row.fuel),
     transmission_norm: foldSk(row.transmission), drive_norm: foldSk(row.drive),
     motor_norm: foldSk(row.motor), is_active: 1, last_seen_at: now, last_checked_at: now,
     trim_norm: foldSk([row.title,row.equipment,row.other_equipment,row.description].filter(Boolean).join(' ')),

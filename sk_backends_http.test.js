@@ -30,7 +30,7 @@ test('two independent HTTP backends refuse the other market and keep their own p
         const id='A'+i;
         const html='<script id="__NEXT_DATA__">'+JSON.stringify({props:{pageProps:{advertisement:{
           id,brandValue:'Skoda',carModelValue:'Octavia',yearValue:'2020',categoryValue:'Osobné vozidlá',
-          finalPrice:15000+i*1000,title:'Skoda Octavia',mileage:100000}}}})+'</script>';
+          finalPrice:15000+i*1000,title:'Skoda Octavia',fuelValue:'Benzin',mileage:100000}}}})+'</script>';
         saveSkRows(db,[parseSkDetail(html,`https://www.autobazar.eu/detail/skoda/${id}/`)]);
       }
       if(market==='CZ') db.exec("UPDATE vehicle_app SET market='CZ',currency='CZK',price='400000',source_db='sauto',source_url='https://www.sauto.cz/osobni/detail/skoda/octavia/'||rowid");
