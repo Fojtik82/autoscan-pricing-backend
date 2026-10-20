@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizePowertrain } from './vehicle_variant.js';
 import crypto from "node:crypto";
 import Database from "better-sqlite3";
 
@@ -81,7 +82,7 @@ export function sanitizeVehicleObservation(record = {}) {
     title: text(record.title, 500),
     brand_norm: fold(record.brand),
     model_norm: fold(record.model),
-    fuel_norm: fold(record.fuel),
+    fuel_norm: normalizePowertrain({ fuel: record.fuel, motor, model: record.model, title: record.title }) || fold(record.fuel),
     transmission_norm: fold(transmission),
     drive_norm: fold(drive),
     motor_norm: fold(motor),

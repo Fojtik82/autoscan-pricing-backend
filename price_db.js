@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizePowertrain, matchesEdition, matchesEngine } from "./vehicle_variant.js";
 import { countMarketSources, marketSourceId } from "./source_identity.js";
 import Database from "better-sqlite3";
 
@@ -71,22 +72,6 @@ function parseYear(value) {
   return year >= 1886 && year <= new Date().getUTCFullYear() + 1 ? year : null;
 }
 
-function normalizeFuel(value) {
-  const normalized = fold(value);
-  if (!normalized) return "";
-  if (["nafta", "diesel", "tdi", "d"].some((needle) => normalized.includes(needle))) {
-    return "diesel";
-  }
-  if (["benzin", "benzine", "petrol", "tsi", "tfsi"].some((needle) => normalized.includes(needle))) {
-    return "benzin";
-  }
-  if (normalized.includes("hybrid")) return "hybrid";
-  if (normalized.includes("elektro") || normalized.includes("electric")) return "elektro";
-  if (normalized.includes("lpg")) return "lpg";
-  if (normalized.includes("cng")) return "cng";
-  return normalized;
-}
-
 function percentile(values, p) {
   if (!values.length) {
     return null;
@@ -129,6 +114,8 @@ function rowToVehicle(row) {
     year,
     mileage: mileage ? Math.round(mileage) : null,
     fuel: row.fuel || "",
+    powertrain: normalizePowertrain(row),
+    trim: row.trim || row.trim_norm || "",
     motor: row.motor || "",
     transmission: row.transmission || "",
     drive: row.drive || "",
@@ -151,7 +138,7 @@ function scoreVehicle(vehicle, request) {
   if (request.kw && vehicle.kw) {
     score += Math.abs(vehicle.kw - request.kw) * 0.7;
   }
-  if (request.fuelNorm && normalizeFuel(vehicle.fuel) !== request.fuelNorm) {
+  if (request.fuelNorm && vehicle.powertrain !== request.fuelNorm) {
     score += 35;
   }
   if (request.transmissionNorm && fold(vehicle.transmission) !== request.transmissionNorm) {
@@ -199,6 +186,7 @@ function normalizeRequest(input = {}) {
     brand,
     model,
     modelDetail,
+    motor: input.motor || input.engine || "",
     brandNorm: fold(brand),
     modelNorm: fold(model),
     modelCompact: compact(model),
@@ -206,7 +194,8 @@ function normalizeRequest(input = {}) {
     detailCompact: compact(modelDetail),
     year: parseYear(input.year),
     mileageKm: mileageKm ? Math.round(mileageKm) : null,
-    fuelNorm: normalizeFuel(input.fuel),
+    fuelNorm: normalizePowertrain({ ...input, motor: input.motor || input.engine, title: modelDetail }),
+    fuelSpecified: Boolean(input.fuel || input.powertrain),
     transmissionNorm: fold(input.transmission),
     driveNorm: fold(input.drive),
     kw: parseNumber(input.kw || input.powerKw || input.power),
@@ -256,15 +245,9 @@ function buildWhere(request, attempt, supportsActiveFlag = false, supportsFreshn
     params.modelCompactLike = `%${request.modelCompact}%`;
   }
 
-  if (request.detailNorm && attempt.useDetail) {
-    where.push(`(
-      trim_norm LIKE @detailLike
-      OR motor_norm LIKE @detailLike
-      OR lower(title) LIKE @detailLike
-      OR lower(title) LIKE @detailCompactLike
-    )`);
-    params.detailLike = `%${request.detailNorm.replace(/\s+/g, "%")}%`;
-    params.detailCompactLike = `%${request.detailCompact}%`;
+  if (request.detailNorm) {
+    where.push("carprice_edition(@detail, COALESCE(trim_norm,'') || ' ' || COALESCE(motor,'') || ' ' || COALESCE(model,'') || ' ' || COALESCE(title,'')) = 1");
+    params.detail = request.modelDetail;
   }
 
   if (request.year && attempt.yearWindow !== null) {
@@ -273,22 +256,28 @@ function buildWhere(request, attempt, supportsActiveFlag = false, supportsFreshn
     params.yearTo = request.year + attempt.yearWindow;
   }
 
-  if (request.fuelNorm && attempt.useFuel) {
-    where.push("(fuel_norm LIKE @fuelLike OR lower(fuel) LIKE @fuelLike)");
-    params.fuelLike = `%${request.fuelNorm}%`;
+  if (request.fuelSpecified && (!request.fuelNorm || request.fuelNorm === 'hybrid')) {
+    where.push("0"); // A generic hybrid label cannot identify PHEV, HEV or MHEV.
+  } else if (request.fuelNorm) {
+    where.push("carprice_powertrain(COALESCE(NULLIF(fuel,''),fuel_norm),motor,model,title) = @powertrain");
+    params.powertrain = request.fuelNorm;
+  }
+  if (request.motor) {
+    where.push("carprice_engine(@motor, COALESCE(motor,'') || ' ' || COALESCE(title,'')) = 1");
+    params.motor = request.motor;
   }
 
-  if (request.transmissionNorm && attempt.useTransmission) {
+  if (request.transmissionNorm) {
     where.push("(transmission_norm LIKE @transmissionLike OR lower(transmission) LIKE @transmissionLike)");
     params.transmissionLike = `%${request.transmissionNorm}%`;
   }
 
-  if (request.driveNorm && attempt.useDrive) {
+  if (request.driveNorm) {
     where.push("(drive_norm LIKE @driveLike OR lower(drive) LIKE @driveLike)");
     params.driveLike = `%${request.driveNorm}%`;
   }
 
-  if (request.kw && attempt.useKw) {
+  if (request.kw) {
     where.push("CAST(kw AS INTEGER) BETWEEN @kwFrom AND @kwTo");
     params.kwFrom = Math.max(1, Math.round(request.kw - 18));
     params.kwTo = Math.round(request.kw + 18);
@@ -300,6 +289,10 @@ function buildWhere(request, attempt, supportsActiveFlag = false, supportsFreshn
 export function initVehicleDb(dbPath) {
   const resolvedPath = path.resolve(dbPath);
   const db = new Database(resolvedPath, { readonly: true, fileMustExist: true });
+  db.function('carprice_powertrain', { deterministic: true }, (fuel, motor, model, title) =>
+    normalizePowertrain({ fuel, motor, model, title }));
+  db.function('carprice_edition', { deterministic: true }, (requested, text) => Number(matchesEdition(requested, text)));
+  db.function('carprice_engine', { deterministic: true }, (requested, text) => Number(matchesEngine(requested, text)));
   const table = detectTable(db);
 
   if (!table) {
@@ -316,10 +309,7 @@ export function initVehicleDb(dbPath) {
     const request = normalizeRequest(input);
     const attempts = [
       { yearWindow: 1, useFuel: true, useKw: true, useTransmission: true, useDrive: true, useDetail: true },
-      { yearWindow: 2, useFuel: true, useKw: true, useTransmission: false, useDrive: false, useDetail: true },
-      { yearWindow: 4, useFuel: true, useKw: false, useTransmission: false, useDrive: false, useDetail: false },
-      { yearWindow: 6, useFuel: false, useKw: false, useTransmission: false, useDrive: false, useDetail: false },
-      { yearWindow: null, useFuel: false, useKw: false, useTransmission: false, useDrive: false, useDetail: false },
+      { yearWindow: 2, useFuel: true, useKw: true, useTransmission: true, useDrive: true, useDetail: true },
     ];
 
     let bestRows = [];
@@ -332,7 +322,7 @@ export function initVehicleDb(dbPath) {
           `
           SELECT
             brand, model, year, mileage, fuel, motor, price, transmission, drive,
-            source_url, source_db, title, kw
+            source_url, source_db, title, trim_norm AS trim, kw
           FROM ${JSON.stringify(table)}
           WHERE ${where}
           LIMIT @limit
@@ -365,10 +355,25 @@ export function initVehicleDb(dbPath) {
     const selected = vehicles.slice(0, Math.min(120, Math.max(vehicles.length, 0)));
     const prices = selected.map((vehicle) => vehicle.price_czk).filter(Boolean);
     const sourceCounts = countMarketSources(selected);
+    const powertrains = new Set(selected.map(vehicle => vehicle.powertrain).filter(Boolean));
+    const unconfirmed = request.fuelNorm === 'hybrid' ||
+      request.fuelSpecified && !request.fuelNorm ||
+      !request.fuelNorm && selected.length > 0 && (powertrains.size !== 1 || selected.some(vehicle => !vehicle.powertrain || vehicle.powertrain === 'hybrid'));
+    const matching = {
+      schema_version: 1, powertrain: request.fuelNorm || null,
+      powertrain_applied: Boolean(request.fuelNorm) && !unconfirmed,
+      engine: request.motor || null, engine_applied: Boolean(request.motor),
+      trim: request.modelDetail || null, trim_applied: Boolean(request.detailNorm),
+      power_applied: Boolean(request.kw), transmission_applied: Boolean(request.transmissionNorm),
+      drive_applied: Boolean(request.driveNorm), year_window: usedAttempt.yearWindow,
+      minimum_comparables: 3,
+    };
 
-    if (prices.length < 3) {
+    if (prices.length < 3 || unconfirmed) {
       return {
         found: false,
+        matching,
+        price_estimate_not_found_reason: unconfirmed ? 'powertrain_unconfirmed' : 'insufficient_comparable_vehicles',
         count: prices.length,
         source_counts: sourceCounts,
         price_czk: null,
@@ -382,6 +387,7 @@ export function initVehicleDb(dbPath) {
 
     return {
       found: true,
+      matching,
       count: prices.length,
       source_counts: sourceCounts,
       price_czk: roundPrice(percentile(prices, 0.5)),
@@ -460,6 +466,9 @@ export function initVehicleDb(dbPath) {
       year: vehicle.year,
       mileage: vehicle.mileage,
       fuel: vehicle.fuel,
+      powertrain: vehicle.powertrain,
+      title: vehicle.title,
+      trim: vehicle.trim,
       motor: vehicle.motor,
       transmission: vehicle.transmission,
       drive: vehicle.drive,
