@@ -1,7 +1,7 @@
 {
   "market": "SK",
   "currency": "EUR",
-  "updated_at": "2026-10-19T19:16:59.079Z",
+  "updated_at": "2026-10-20T17:14:36.953Z",
   "complete": false,
   "blocked": true,
   "sources": [
@@ -12,24 +12,24 @@
       "sitemaps_remaining": 0,
       "discovered": 52614,
       "counts": {
-        "done": 29900,
-        "error": 10,
-        "gone": 272,
-        "pending": 19014,
-        "rejected": 3418
+        "done": 46881,
+        "error": 13,
+        "gone": 606,
+        "pending": 1278,
+        "rejected": 3836
       },
       "records": [
         {
           "vehicle_type": "commercial",
-          "count": 3880
+          "count": 3872
         },
         {
           "vehicle_type": "motorcycle",
-          "count": 1252
+          "count": 1251
         },
         {
           "vehicle_type": "passenger",
-          "count": 45133
+          "count": 44910
         }
       ],
       "last_error": null,
@@ -43,24 +43,23 @@
       "sitemaps_remaining": 0,
       "discovered": 30838,
       "counts": {
-        "done": 20167,
-        "error": 12,
-        "gone": 938,
-        "pending": 8631,
-        "rejected": 1090
+        "done": 28048,
+        "error": 1,
+        "gone": 1432,
+        "rejected": 1357
       },
       "records": [
         {
           "vehicle_type": "commercial",
-          "count": 2441
+          "count": 2425
         },
         {
           "vehicle_type": "motorcycle",
-          "count": 917
+          "count": 916
         },
         {
           "vehicle_type": "passenger",
-          "count": 26220
+          "count": 26033
         }
       ],
       "last_error": null,
@@ -74,15 +73,15 @@
       "sitemaps_remaining": 0,
       "discovered": 21823,
       "counts": {
-        "error": 2,
-        "gone": 6,
-        "pending": 21666,
-        "rejected": 149
+        "error": 3,
+        "gone": 9,
+        "pending": 21514,
+        "rejected": 297
       },
       "records": [
         {
           "vehicle_type": "motorcycle",
-          "count": 17159
+          "count": 17157
         }
       ],
       "last_error": "bazos_moto_sk: HTTP 429",
@@ -96,10 +95,10 @@
       "sitemaps_remaining": 0,
       "discovered": 107539,
       "counts": {
-        "done": 11365,
-        "error": 1,
-        "pending": 91563,
-        "rejected": 4610
+        "done": 11610,
+        "error": 2,
+        "pending": 91241,
+        "rejected": 4686
       },
       "records": [
         {
