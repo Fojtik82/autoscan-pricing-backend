@@ -1,6 +1,7 @@
 import path from "node:path";
 import { normalizePowertrain, matchesEdition, matchesEngine } from "./vehicle_variant.js";
 import { countMarketSources, marketSourceId } from "./source_identity.js";
+import { ANNOTATED_SPECS_POLICY, assessSpec, unknownSpecs, summarizePartialSpecs } from "./comparison_policy.js";
 import Database from "better-sqlite3";
 
 const TABLE_CANDIDATES = [
@@ -123,6 +124,8 @@ function rowToVehicle(row) {
     price_czk: price,
     title: row.title || "",
     source_db: row.source_db || "",
+    _transmission_norm: row.transmission_norm || "",
+    _drive_norm: row.drive_norm || "",
   };
 }
 
@@ -199,6 +202,7 @@ function normalizeRequest(input = {}) {
     transmissionNorm: fold(input.transmission),
     driveNorm: fold(input.drive),
     kw: parseNumber(input.kw || input.powerKw || input.power),
+    comparisonPolicy: input.comparison_policy === ANNOTATED_SPECS_POLICY ? ANNOTATED_SPECS_POLICY : '',
   };
 }
 
@@ -268,13 +272,23 @@ function buildWhere(request, attempt, supportsActiveFlag = false, supportsFreshn
   }
 
   if (request.transmissionNorm) {
-    where.push("(transmission_norm LIKE @transmissionLike OR lower(transmission) LIKE @transmissionLike)");
-    params.transmissionLike = `%${request.transmissionNorm}%`;
+    if (request.comparisonPolicy) {
+      where.push("carprice_partial_spec('transmission', @transmission, transmission, transmission_norm, title) = 1");
+      params.transmission = request.transmissionNorm;
+    } else {
+      where.push("(transmission_norm LIKE @transmissionLike OR lower(transmission) LIKE @transmissionLike)");
+      params.transmissionLike = `%${request.transmissionNorm}%`;
+    }
   }
 
   if (request.driveNorm) {
-    where.push("(drive_norm LIKE @driveLike OR lower(drive) LIKE @driveLike)");
-    params.driveLike = `%${request.driveNorm}%`;
+    if (request.comparisonPolicy) {
+      where.push("carprice_partial_spec('drive', @drive, drive, drive_norm, title) = 1");
+      params.drive = request.driveNorm;
+    } else {
+      where.push("(drive_norm LIKE @driveLike OR lower(drive) LIKE @driveLike)");
+      params.driveLike = `%${request.driveNorm}%`;
+    }
   }
 
   if (request.kw) {
@@ -293,6 +307,8 @@ export function initVehicleDb(dbPath) {
     normalizePowertrain({ fuel, motor, model, title }));
   db.function('carprice_edition', { deterministic: true }, (requested, text) => Number(matchesEdition(requested, text)));
   db.function('carprice_engine', { deterministic: true }, (requested, text) => Number(matchesEngine(requested, text)));
+  db.function('carprice_partial_spec', { deterministic: true }, (kind, requested, raw, normalized, title) =>
+    Number(assessSpec(kind, requested, raw, normalized, title).include));
   const table = detectTable(db);
 
   if (!table) {
@@ -322,7 +338,7 @@ export function initVehicleDb(dbPath) {
           `
           SELECT
             brand, model, year, mileage, fuel, motor, price, transmission, drive,
-            source_url, source_db, title, trim_norm AS trim, kw
+            source_url, source_db, title, trim_norm AS trim, kw, transmission_norm, drive_norm
           FROM ${JSON.stringify(table)}
           WHERE ${where}
           LIMIT @limit
@@ -355,6 +371,7 @@ export function initVehicleDb(dbPath) {
     const selected = vehicles.slice(0, Math.min(120, Math.max(vehicles.length, 0)));
     const prices = selected.map((vehicle) => vehicle.price_czk).filter(Boolean);
     const sourceCounts = countMarketSources(selected);
+    const partialSpecs = request.comparisonPolicy ? summarizePartialSpecs(selected, request) : null;
     const powertrains = new Set(selected.map(vehicle => vehicle.powertrain).filter(Boolean));
     const unconfirmed = request.fuelNorm === 'hybrid' ||
       request.fuelSpecified && !request.fuelNorm ||
@@ -367,6 +384,9 @@ export function initVehicleDb(dbPath) {
       power_applied: Boolean(request.kw), transmission_applied: Boolean(request.transmissionNorm),
       drive_applied: Boolean(request.driveNorm), year_window: usedAttempt.yearWindow,
       minimum_comparables: 3,
+      ...(partialSpecs ? { comparison_policy: request.comparisonPolicy,
+        transmission_fully_confirmed: partialSpecs.transmission_unknown === 0,
+        drive_fully_confirmed: partialSpecs.drive_unknown === 0 } : {}),
     };
 
     if (prices.length < 3 || unconfirmed) {
@@ -376,6 +396,7 @@ export function initVehicleDb(dbPath) {
         price_estimate_not_found_reason: unconfirmed ? 'powertrain_unconfirmed' : 'insufficient_comparable_vehicles',
         count: prices.length,
         source_counts: sourceCounts,
+        ...(partialSpecs ? { comparison_policy: request.comparisonPolicy, partial_specs: partialSpecs } : {}),
         price_czk: null,
         low_czk: null,
         high_czk: null,
@@ -390,6 +411,7 @@ export function initVehicleDb(dbPath) {
       matching,
       count: prices.length,
       source_counts: sourceCounts,
+      ...(partialSpecs ? { comparison_policy: request.comparisonPolicy, partial_specs: partialSpecs } : {}),
       price_czk: roundPrice(percentile(prices, 0.5)),
       low_czk: roundPrice(percentile(prices, 0.15)),
       high_czk: roundPrice(percentile(prices, 0.85)),
@@ -407,6 +429,7 @@ export function initVehicleDb(dbPath) {
   }
 
   function findComps(input, limit = 12) {
+    const comparisonRequest = normalizeRequest(input);
     const requested = Number(limit);
     const cap = Number.isFinite(requested) ? Math.max(1, Math.min(Math.floor(requested), 5000)) : 12;
     let vehicles;
@@ -475,6 +498,7 @@ export function initVehicleDb(dbPath) {
       kw: vehicle.kw,
       price_czk: vehicle.price_czk,
       scraped_at: vehicle.source_db,
+      ...(comparisonRequest.comparisonPolicy ? { comparison_unknown: unknownSpecs(vehicle, comparisonRequest) } : {}),
     }));
   }
 
