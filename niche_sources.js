@@ -96,18 +96,110 @@ function robotsPolicy(body) {
   };
 }
 
-async function makeReader(source) {
+const RETRYABLE_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+const RETRYABLE_NETWORK_CODES = new Set([
+  "ECONNRESET", "ECONNREFUSED", "EPIPE", "ETIMEDOUT", "EAI_AGAIN", "ENOTFOUND",
+  "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT",
+]);
+const MAX_REQUEST_ATTEMPTS = 4;
+const MAX_RETRY_DELAY_MS = 60000;
+
+function retryableReadError(error) {
+  if (error.status !== undefined) return RETRYABLE_HTTP_STATUSES.has(error.status);
+  // DOMException timeouts also have a numeric legacy code; classify by name first.
+  if (error.name === "TimeoutError" || error.name === "AbortError") return true;
+  const code = error.cause?.code || error.code;
+  if (code) return RETRYABLE_NETWORK_CODES.has(code);
+  return error instanceof TypeError && /^(fetch failed|terminated)$/i.test(error.message);
+}
+
+function retryAfterMs(value, now) {
+  if (!value) return 0;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000;
+  const date = Date.parse(trimmed);
+  return Number.isFinite(date) ? Math.max(0, date - now) : 0;
+}
+
+export async function makeReader(source, {
+  fetchImpl = globalThis.fetch, sleepImpl = sleep, now = Date.now, onRetry = console.warn,
+} = {}) {
   let policy = null;
   let queue = Promise.resolve();
   let lastStarted = 0;
+  let retryNotBefore = 0;
   let delay = bounded(process.env.NICHE_REQUEST_DELAY_MS, 600, 500, 60000);
   async function pace() {
     const next = queue.then(async () => {
-      await sleep(Math.max(0, lastStarted + delay - Date.now()));
-      lastStarted = Date.now();
+      // The other worker may extend the cooldown while this one is already sleeping.
+      let waitMs;
+      while ((waitMs = Math.max(0, lastStarted + delay - now(), retryNotBefore - now())) > 0) {
+        await sleepImpl(waitMs);
+      }
+      lastStarted = now();
     });
     queue = next.catch(() => {});
     await next;
+  }
+  async function request(url) {
+    for (let attempt = 1; attempt <= MAX_REQUEST_ATTEMPTS; attempt += 1) {
+      await pace();
+      let response;
+      try {
+        response = await fetchImpl(url, {
+          redirect: "manual", signal: AbortSignal.timeout(30000),
+          headers: { "User-Agent": USER_AGENT, Accept: "text/html,text/plain;q=0.8" },
+        });
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+          const location = response.headers.get("location");
+          await response.body?.cancel();
+          if (!location) throw new Error(source.id + ": redirect without location");
+          return { status: response.status, location };
+        }
+        if ([404, 410].includes(response.status)) {
+          await response.body?.cancel();
+          return { status: response.status, url: url.href, html: "" };
+        }
+        if (response.status !== 200) {
+          const error = new Error(source.id + ": HTTP " + response.status);
+          error.status = response.status;
+          error.retryAfter = response.headers.get("retry-after");
+          throw error;
+        }
+        const chunks = [];
+        let length = 0;
+        for await (const chunk of response.body) {
+          length += chunk.length;
+          if (length > 4 * 1024 * 1024) throw new Error(source.id + ": response too large");
+          chunks.push(Buffer.from(chunk));
+        }
+        const bytes = Buffer.concat(chunks);
+        const type = response.headers.get("content-type") || "";
+        const charset = /charset\s*=\s*["']?([a-z0-9-]+)/i.exec(type)?.[1] || "utf-8";
+        const html = new TextDecoder(charset).decode(bytes);
+        const title = text(/<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] || "");
+        if (/just a moment|access denied|verify you are human|captcha/i.test(title)) {
+          throw new Error(source.id + ": access challenge");
+        }
+        return { status: 200, url: url.href, html };
+      } catch (error) {
+        // A failed body read must discard its partial bytes before a fresh request.
+        await response?.body?.cancel().catch(() => {});
+        if (!retryableReadError(error)) throw error;
+        if (attempt === MAX_REQUEST_ATTEMPTS) {
+          throw new Error(source.id + ": request failed after " + attempt + " attempts: "
+            + error.message, { cause: error });
+        }
+        const retryDelay = Math.max(1000 * 2 ** (attempt - 1), retryAfterMs(error.retryAfter, now()));
+        if (retryDelay > MAX_RETRY_DELAY_MS) {
+          throw new Error(source.id + ": Retry-After exceeds the 60s retry budget", { cause: error });
+        }
+        // Both workers share the source cooldown, including a server's Retry-After.
+        retryNotBefore = Math.max(retryNotBefore, now() + retryDelay);
+        onRetry(source.id + ": retry " + (attempt + 1) + "/" + MAX_REQUEST_ATTEMPTS
+          + " in " + retryDelay + "ms for " + url.href + ": " + error.message);
+      }
+    }
   }
   async function read(input, robots = false) {
     let url = new URL(input);
@@ -117,42 +209,12 @@ async function makeReader(source) {
         throw new Error(source.id + ": unsafe redirect or URL");
       }
       if (!robots && !policy.allows(url)) throw new Error(source.id + ": robots disallows URL");
-      await pace();
-      const response = await fetch(url, {
-        redirect: "manual", signal: AbortSignal.timeout(30000),
-        headers: { "User-Agent": USER_AGENT, Accept: "text/html,text/plain;q=0.8" },
-      });
-      if ([301, 302, 303, 307, 308].includes(response.status)) {
-        const location = response.headers.get("location");
-        await response.body?.cancel();
-        if (!location) throw new Error(source.id + ": redirect without location");
-        url = new URL(location, url);
+      const response = await request(url);
+      if (response.location) {
+        url = new URL(response.location, url);
         continue;
       }
-      if ([404, 410].includes(response.status)) {
-        await response.body?.cancel();
-        return { status: response.status, url: url.href, html: "" };
-      }
-      if (response.status !== 200) {
-        await response.body?.cancel();
-        throw new Error(source.id + ": HTTP " + response.status);
-      }
-      const chunks = [];
-      let length = 0;
-      for await (const chunk of response.body) {
-        length += chunk.length;
-        if (length > 4 * 1024 * 1024) throw new Error(source.id + ": response too large");
-        chunks.push(Buffer.from(chunk));
-      }
-      const bytes = Buffer.concat(chunks);
-      const type = response.headers.get("content-type") || "";
-      const charset = /charset\s*=\s*["']?([a-z0-9-]+)/i.exec(type)?.[1] || "utf-8";
-      const html = new TextDecoder(charset).decode(bytes);
-      const title = text(/<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] || "");
-      if (/just a moment|access denied|verify you are human|captcha/i.test(title)) {
-        throw new Error(source.id + ": access challenge");
-      }
-      return { status: 200, url: url.href, html };
+      return response;
     }
     throw new Error(source.id + ": too many redirects");
   }
