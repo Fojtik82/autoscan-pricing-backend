@@ -2,6 +2,8 @@ import path from "node:path";
 import { normalizePowertrain, matchesEdition, matchesEngine } from "./vehicle_variant.js";
 import { countMarketSources, marketSourceId } from "./source_identity.js";
 import { ANNOTATED_SPECS_POLICY, assessSpec, unknownSpecs, summarizePartialSpecs } from "./comparison_policy.js";
+import { parseMileage, mileageBandwidth, mileageWeight, weightedPercentile,
+  effectiveComparables, MIN_EFFECTIVE_COMPARABLES, MILEAGE_PRICE_METHOD } from "./mileage_pricing.js";
 import Database from "better-sqlite3";
 
 const TABLE_CANDIDATES = [
@@ -104,7 +106,7 @@ function detectTable(db) {
 function rowToVehicle(row) {
   const price = parseMoney(row.price);
   const year = parseYear(row.year);
-  const mileage = parseNumber(row.mileage);
+  const mileage = parseMileage(row.mileage);
   const kw = parseNumber(row.kw);
 
   return {
@@ -135,8 +137,10 @@ function scoreVehicle(vehicle, request) {
   if (request.year && vehicle.year) {
     score += Math.abs(vehicle.year - request.year) * 12;
   }
-  if (request.mileageKm && vehicle.mileage) {
-    score += Math.abs(vehicle.mileage - request.mileageKm) / 12000;
+  if (request.mileageKm) {
+    score += vehicle.mileage > 0
+      ? Math.abs(vehicle.mileage - request.mileageKm) / mileageBandwidth(request.mileageKm) * 12
+      : 1000000;
   }
   if (request.kw && vehicle.kw) {
     score += Math.abs(vehicle.kw - request.kw) * 0.7;
@@ -183,7 +187,8 @@ function normalizeRequest(input = {}) {
   const brand = input.brand || input.make || "";
   const model = normalizeModelInput(brand, input.model || "");
   const modelDetail = input.modelDetail || input.equipment || input.trim || "";
-  const mileageKm = parseNumber(input.mileageKm || input.mileage || input.odometerKm);
+  const rawMileage = input.mileageKm ?? input.mileage ?? input.odometerKm;
+  const mileageKm = parseMileage(rawMileage);
 
   return {
     brand,
@@ -197,6 +202,7 @@ function normalizeRequest(input = {}) {
     detailCompact: compact(modelDetail),
     year: parseYear(input.year),
     mileageKm: mileageKm ? Math.round(mileageKm) : null,
+    invalidMileage: rawMileage != null && String(rawMileage).trim() !== '' && mileageKm === null,
     fuelNorm: normalizePowertrain({ ...input, motor: input.motor || input.engine, title: modelDetail }),
     fuelSpecified: Boolean(input.fuel || input.powertrain),
     transmissionNorm: fold(input.transmission),
@@ -309,6 +315,7 @@ export function initVehicleDb(dbPath) {
   db.function('carprice_engine', { deterministic: true }, (requested, text) => Number(matchesEngine(requested, text)));
   db.function('carprice_partial_spec', { deterministic: true }, (kind, requested, raw, normalized, title) =>
     Number(assessSpec(kind, requested, raw, normalized, title).include));
+  db.function('carprice_mileage', { deterministic: true }, parseMileage);
   const table = detectTable(db);
 
   if (!table) {
@@ -321,7 +328,7 @@ export function initVehicleDb(dbPath) {
   const supportsFreshness = ["is_active", "last_seen_at", "last_checked_at", "missing_checks"]
     .every((column) => columns.has(column));
 
-  function fetchCandidates(input, limit = 5000) {
+  function fetchCandidates(input, limit = 5000, forEstimate = false) {
     const request = normalizeRequest(input);
     const attempts = [
       { yearWindow: 1, useFuel: true, useKw: true, useTransmission: true, useDrive: true, useDetail: true },
@@ -331,8 +338,24 @@ export function initVehicleDb(dbPath) {
     let bestRows = [];
     let usedAttempt = attempts[attempts.length - 1];
 
+    if (request.invalidMileage) return { request, vehicles: [], usedAttempt, table };
+
     for (const attempt of attempts) {
       const { where, params } = buildWhere(request, attempt, supportsActiveFlag, supportsFreshness);
+      // Filter before LIMIT and before deciding whether to widen the year
+      // window. Unknown mileage cannot crowd out usable price evidence.
+      let mileageWhere = '';
+      let mileageOrder = '';
+      if (request.mileageKm) {
+        params.targetMileage = request.mileageKm;
+        mileageOrder = `ORDER BY CASE WHEN carprice_mileage(mileage) > 0 THEN 0 ELSE 1 END,
+          ABS(carprice_mileage(mileage) - @targetMileage), source_url`;
+        if (forEstimate) {
+          params.maxMileageDistance = mileageBandwidth(request.mileageKm) * 3;
+          mileageWhere = `AND carprice_mileage(mileage) > 0
+            AND ABS(carprice_mileage(mileage) - @targetMileage) <= @maxMileageDistance`;
+        }
+      }
       const rows = db
         .prepare(
           `
@@ -341,6 +364,8 @@ export function initVehicleDb(dbPath) {
             source_url, source_db, title, trim_norm AS trim, kw, transmission_norm, drive_norm
           FROM ${JSON.stringify(table)}
           WHERE ${where}
+          ${mileageWhere}
+          ${mileageOrder}
           LIMIT @limit
           `,
         )
@@ -367,9 +392,16 @@ export function initVehicleDb(dbPath) {
   }
 
   function estimatePrice(input) {
-    const { request, vehicles, usedAttempt } = fetchCandidates(input);
+    const { request, vehicles, usedAttempt } = fetchCandidates(input, 5000, true);
     const selected = vehicles.slice(0, Math.min(120, Math.max(vehicles.length, 0)));
     const prices = selected.map((vehicle) => vehicle.price_czk).filter(Boolean);
+    const weighted = request.mileageKm ? selected.map(vehicle => ({
+      value: vehicle.price_czk, weight: mileageWeight(vehicle.mileage, request.mileageKm),
+    })) : null;
+    const effectiveCount = weighted ? effectiveComparables(weighted) : prices.length;
+    const insufficientMileageSupport = weighted && effectiveCount < MIN_EFFECTIVE_COMPARABLES;
+    const priceAt = quantile => weighted
+      ? weightedPercentile(weighted, quantile) : percentile(prices, quantile);
     const sourceCounts = countMarketSources(selected);
     const partialSpecs = request.comparisonPolicy ? summarizePartialSpecs(selected, request) : null;
     const powertrains = new Set(selected.map(vehicle => vehicle.powertrain).filter(Boolean));
@@ -384,16 +416,27 @@ export function initVehicleDb(dbPath) {
       power_applied: Boolean(request.kw), transmission_applied: Boolean(request.transmissionNorm),
       drive_applied: Boolean(request.driveNorm), year_window: usedAttempt.yearWindow,
       minimum_comparables: 3,
+      mileage_applied: Boolean(request.mileageKm),
+      mileage_km: request.mileageKm,
+      price_method: weighted ? MILEAGE_PRICE_METHOD : 'median',
+      ...(weighted ? {
+        mileage_bandwidth_km: mileageBandwidth(request.mileageKm),
+        mileage_max_distance_km: mileageBandwidth(request.mileageKm) * 3,
+        mileage_effective_comparables: Math.round(effectiveCount * 100) / 100,
+        mileage_minimum_effective_comparables: MIN_EFFECTIVE_COMPARABLES,
+      } : {}),
       ...(partialSpecs ? { comparison_policy: request.comparisonPolicy,
         transmission_fully_confirmed: partialSpecs.transmission_unknown === 0,
         drive_fully_confirmed: partialSpecs.drive_unknown === 0 } : {}),
     };
 
-    if (prices.length < 3 || unconfirmed) {
+    if (request.invalidMileage || prices.length < 3 || insufficientMileageSupport || unconfirmed) {
       return {
         found: false,
         matching,
-        price_estimate_not_found_reason: unconfirmed ? 'powertrain_unconfirmed' : 'insufficient_comparable_vehicles',
+        price_estimate_not_found_reason: request.invalidMileage ? 'missing_input'
+          : unconfirmed ? 'powertrain_unconfirmed' : 'insufficient_comparable_vehicles',
+        ...(request.invalidMileage ? { invalid_fields: ['mileage'] } : {}),
         count: prices.length,
         source_counts: sourceCounts,
         ...(partialSpecs ? { comparison_policy: request.comparisonPolicy, partial_specs: partialSpecs } : {}),
@@ -412,9 +455,9 @@ export function initVehicleDb(dbPath) {
       count: prices.length,
       source_counts: sourceCounts,
       ...(partialSpecs ? { comparison_policy: request.comparisonPolicy, partial_specs: partialSpecs } : {}),
-      price_czk: roundPrice(percentile(prices, 0.5)),
-      low_czk: roundPrice(percentile(prices, 0.15)),
-      high_czk: roundPrice(percentile(prices, 0.85)),
+      price_czk: roundPrice(priceAt(0.5)),
+      low_czk: roundPrice(priceAt(0.15)),
+      high_czk: roundPrice(priceAt(0.85)),
       source: "backend_db",
       table,
       used_filters: usedAttempt,
