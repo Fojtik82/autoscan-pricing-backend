@@ -152,6 +152,20 @@ test('no extrapolation to a wholly unsupported mileage range', t => {
   assert.equal(result.price_czk, null);
 });
 
+test('high-mileage fallback extrapolates only a bounded, variant-matched sample', t => {
+  const api = fixture(t, [
+    { mileage: 100000, price: 300000 }, { mileage: 140000, price: 280000 },
+    { mileage: 180000, price: 260000 }, { mileage: 220000, price: 240000 },
+  ]);
+  const result = api.estimatePrice({ ...input, mileage: 340000 });
+  assert.equal(result.found, true);
+  assert.equal(result.matching.mileage_extrapolated, true);
+  assert.equal(result.matching.confidence, 'low');
+  assert.equal(result.matching.price_method, 'mileage_extrapolated_weighted_median_v1');
+  assert.ok(result.price_czk < 240000);
+  assert.ok(result.price_czk > 0);
+});
+
 test('known mileage is considered before the 5000-candidate cap and the 120-price cap', t => {
   const api = fixture(t, [
     ...Array(5001).fill({ mileage: null, price: 5000000 }),

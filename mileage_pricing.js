@@ -1,6 +1,7 @@
 // Similarity weights, not a fixed depreciation rate. Prices remain derived
 // from observed advertisements for the already matched vehicle variant.
 export const MILEAGE_PRICE_METHOD = 'mileage_weighted_median_v1';
+export const MILEAGE_EXTRAPOLATION_METHOD = 'mileage_extrapolated_weighted_median_v1';
 export const MIN_EFFECTIVE_COMPARABLES = 2.5;
 
 export function parseMileage(value) {
@@ -27,6 +28,35 @@ export function mileageWeight(mileage, targetKm) {
   if (!(mileage > 0) || !(targetKm > 0)) return 0;
   const distance = Math.abs(mileage - targetKm) / mileageBandwidth(targetKm);
   return distance <= 3 ? Math.exp(-0.5 * distance * distance) : 0;
+}
+
+export function extrapolationBandwidth(targetKm) {
+  return Math.max(120000, Math.min(160000, targetKm * 0.25));
+}
+
+export function extrapolationWeight(mileage, targetKm) {
+  if (!(mileage > 0) || !(targetKm > 0)) return 0;
+  const distance = Math.abs(mileage - targetKm) / extrapolationBandwidth(targetKm);
+  return distance <= 3 ? Math.exp(-0.5 * distance * distance) : 0;
+}
+
+// A median of observed pairwise slopes is resistant to a single unusually
+// cheap or expensive listing. It only normalizes existing asking prices; it
+// never introduces a fixed depreciation rate.
+export function robustMileageSlope(rows) {
+  const slopes = [];
+  for (let left = 0; left < rows.length; left += 1) {
+    for (let right = left + 1; right < rows.length; right += 1) {
+      const distance = rows[right].mileage - rows[left].mileage;
+      if (Math.abs(distance) < 25000) continue;
+      slopes.push((rows[right].price - rows[left].price) / distance);
+    }
+  }
+  if (!slopes.length) return null;
+  slopes.sort((a, b) => a - b);
+  // Asking prices should not rise with mileage. Capping a very steep decline
+  // prevents a small, noisy sample from producing a negative price.
+  return Math.max(-1.5, Math.min(0, slopes[Math.floor(slopes.length / 2)]));
 }
 
 export function effectiveComparables(weighted) {

@@ -3,7 +3,9 @@ import { normalizePowertrain, matchesEdition, matchesEngine } from "./vehicle_va
 import { countMarketSources, marketSourceId } from "./source_identity.js";
 import { ANNOTATED_SPECS_POLICY, assessSpec, unknownSpecs, summarizePartialSpecs } from "./comparison_policy.js";
 import { parseMileage, mileageBandwidth, mileageWeight, weightedPercentile,
-  effectiveComparables, MIN_EFFECTIVE_COMPARABLES, MILEAGE_PRICE_METHOD } from "./mileage_pricing.js";
+  effectiveComparables, MIN_EFFECTIVE_COMPARABLES, MILEAGE_PRICE_METHOD,
+  MILEAGE_EXTRAPOLATION_METHOD, extrapolationBandwidth, extrapolationWeight,
+  robustMileageSlope } from "./mileage_pricing.js";
 import Database from "better-sqlite3";
 
 const TABLE_CANDIDATES = [
@@ -328,7 +330,7 @@ export function initVehicleDb(dbPath) {
   const supportsFreshness = ["is_active", "last_seen_at", "last_checked_at", "missing_checks"]
     .every((column) => columns.has(column));
 
-  function fetchCandidates(input, limit = 5000, forEstimate = false) {
+  function fetchCandidates(input, limit = 5000, forEstimate = false, mileageDistanceMultiplier = 3) {
     const request = normalizeRequest(input);
     const attempts = [
       { yearWindow: 1, useFuel: true, useKw: true, useTransmission: true, useDrive: true, useDetail: true },
@@ -351,7 +353,7 @@ export function initVehicleDb(dbPath) {
         mileageOrder = `ORDER BY CASE WHEN carprice_mileage(mileage) > 0 THEN 0 ELSE 1 END,
           ABS(carprice_mileage(mileage) - @targetMileage), source_url`;
         if (forEstimate) {
-          params.maxMileageDistance = mileageBandwidth(request.mileageKm) * 3;
+          params.maxMileageDistance = mileageBandwidth(request.mileageKm) * mileageDistanceMultiplier;
           mileageWhere = `AND carprice_mileage(mileage) > 0
             AND ABS(carprice_mileage(mileage) - @targetMileage) <= @maxMileageDistance`;
         }
@@ -392,7 +394,7 @@ export function initVehicleDb(dbPath) {
   }
 
   function estimatePrice(input) {
-    const { request, vehicles, usedAttempt } = fetchCandidates(input, 5000, true);
+    let { request, vehicles, usedAttempt } = fetchCandidates(input, 5000, true);
     const selected = vehicles.slice(0, Math.min(120, Math.max(vehicles.length, 0)));
     const prices = selected.map((vehicle) => vehicle.price_czk).filter(Boolean);
     const weighted = request.mileageKm ? selected.map(vehicle => ({
@@ -408,6 +410,57 @@ export function initVehicleDb(dbPath) {
     const unconfirmed = request.fuelNorm === 'hybrid' ||
       request.fuelSpecified && !request.fuelNorm ||
       !request.fuelNorm && selected.length > 0 && (powertrains.size !== 1 || selected.some(vehicle => !vehicle.powertrain || vehicle.powertrain === 'hybrid'));
+
+    // High-mileage cars are rare. When the normal local neighbourhood has too
+    // little evidence, extend it while preserving every variant constraint,
+    // then normalize observed prices to the requested mileage from the
+    // observed median mileage slope. This is deliberately low confidence.
+    if (!request.invalidMileage && request.mileageKm && (prices.length < 3 || insufficientMileageSupport) && !unconfirmed) {
+      const extended = fetchCandidates(input, 5000, true, 6);
+      const candidates = extended.vehicles.slice(0, 120)
+        .filter(vehicle => vehicle.price_czk && vehicle.mileage > 0);
+      const mileageValues = candidates.map(vehicle => vehicle.mileage);
+      const minimumMileage = Math.min(...mileageValues);
+      const maximumMileage = Math.max(...mileageValues);
+      const outsideRange = Math.max(minimumMileage - request.mileageKm, request.mileageKm - maximumMileage, 0);
+      const slope = robustMileageSlope(candidates.map(vehicle => ({ mileage: vehicle.mileage, price: vehicle.price_czk })));
+      const adjusted = slope === null ? [] : candidates.map(vehicle => ({
+        value: vehicle.price_czk + slope * (request.mileageKm - vehicle.mileage),
+        weight: extrapolationWeight(vehicle.mileage, request.mileageKm),
+      })).filter(item => item.value > 0 && item.weight > 0);
+      const extrapolatedEffectiveCount = effectiveComparables(adjusted);
+      if (candidates.length >= 4 && maximumMileage - minimumMileage >= 100000 &&
+          outsideRange <= 180000 && extrapolatedEffectiveCount >= MIN_EFFECTIVE_COMPARABLES) {
+        vehicles = extended.vehicles;
+        usedAttempt = extended.usedAttempt;
+        const sourceCounts = countMarketSources(candidates);
+        return {
+          found: true,
+          matching: {
+            schema_version: 1, powertrain: request.fuelNorm || null,
+            powertrain_applied: Boolean(request.fuelNorm), engine: request.motor || null,
+            engine_applied: Boolean(request.motor), trim: request.modelDetail || null,
+            trim_applied: Boolean(request.detailNorm), power_applied: Boolean(request.kw),
+            transmission_applied: Boolean(request.transmissionNorm), drive_applied: Boolean(request.driveNorm),
+            year_window: usedAttempt.yearWindow, minimum_comparables: 3,
+            mileage_applied: true, mileage_km: request.mileageKm,
+            mileage_extrapolated: true, mileage_extrapolation_slope_czk_per_km: slope,
+            mileage_bandwidth_km: extrapolationBandwidth(request.mileageKm),
+            mileage_max_distance_km: mileageBandwidth(request.mileageKm) * 6,
+            mileage_effective_comparables: Math.round(extrapolatedEffectiveCount * 100) / 100,
+            mileage_minimum_effective_comparables: MIN_EFFECTIVE_COMPARABLES,
+            price_method: MILEAGE_EXTRAPOLATION_METHOD, confidence: 'low',
+          },
+          count: candidates.length, source_counts: sourceCounts,
+          price_czk: roundPrice(weightedPercentile(adjusted, 0.5)),
+          low_czk: roundPrice(weightedPercentile(adjusted, 0.15)),
+          high_czk: roundPrice(weightedPercentile(adjusted, 0.85)),
+          source: "backend_db", table, used_filters: usedAttempt,
+          request: { brand: request.brand, model: request.model, year: request.year,
+            mileage_km: request.mileageKm, fuel: request.fuelNorm },
+        };
+      }
+    }
     const matching = {
       schema_version: 1, powertrain: request.fuelNorm || null,
       powertrain_applied: Boolean(request.fuelNorm) && !unconfirmed,
