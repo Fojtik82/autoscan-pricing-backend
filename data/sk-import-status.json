@@ -1,7 +1,7 @@
 {
   "market": "SK",
   "currency": "EUR",
-  "updated_at": "2026-10-27T14:49:53.611Z",
+  "updated_at": "2026-10-28T15:19:41.563Z",
   "complete": false,
   "blocked": true,
   "sources": [
@@ -70,15 +70,15 @@
       "sitemaps_remaining": 0,
       "discovered": 21823,
       "counts": {
-        "error": 18,
-        "gone": 51,
-        "pending": 20482,
-        "rejected": 1272
+        "error": 20,
+        "gone": 54,
+        "pending": 20349,
+        "rejected": 1400
       },
       "records": [
         {
           "vehicle_type": "motorcycle",
-          "count": 17126
+          "count": 17124
         }
       ],
       "last_error": "bazos_moto_sk: HTTP 429",
@@ -92,11 +92,11 @@
       "sitemaps_remaining": 0,
       "discovered": 107539,
       "counts": {
-        "done": 13138,
-        "error": 11,
+        "done": 13309,
+        "error": 12,
         "gone": 3,
-        "pending": 89016,
-        "rejected": 5371
+        "pending": 88765,
+        "rejected": 5450
       },
       "records": [
         {
