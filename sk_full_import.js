@@ -12,7 +12,7 @@ export function ensureCrawlSchema(db) {
     source TEXT PRIMARY KEY, generation TEXT NOT NULL, phase TEXT NOT NULL,
     sitemap_queue TEXT NOT NULL, visited_sitemaps TEXT NOT NULL,
     index_complete INTEGER NOT NULL DEFAULT 0, started_at TEXT NOT NULL, completed_at TEXT,
-    last_error TEXT, last_progress_at TEXT);
+    last_error TEXT, last_progress_at TEXT, retry_at TEXT);
     CREATE TABLE IF NOT EXISTS sk_crawl_queue (
     source TEXT NOT NULL, id TEXT NOT NULL, url TEXT NOT NULL, generation TEXT NOT NULL,
     modified_at TEXT, state TEXT NOT NULL DEFAULT 'pending', checked_at TEXT,
@@ -22,6 +22,21 @@ export function ensureCrawlSchema(db) {
     CREATE TABLE IF NOT EXISTS sk_price_history (
     source TEXT NOT NULL, id TEXT NOT NULL, checked_at TEXT NOT NULL, price TEXT NOT NULL,
     currency TEXT NOT NULL CHECK(currency='EUR'), PRIMARY KEY(source,id,checked_at));`);
+  const columns = db.prepare('PRAGMA table_info(sk_crawl_sources)').all().map(column => column.name);
+  if (!columns.includes('retry_at')) db.exec('ALTER TABLE sk_crawl_sources ADD COLUMN retry_at TEXT');
+}
+
+const BAZOS_REQUEST_DELAY_MS = 2500;
+const BAZOS_429_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+const isBazos = source => source.id === 'bazos_sk' || source.id === 'bazos_moto_sk';
+const isRateLimited = error => /HTTP 429/.test(error.message);
+
+function blockSource(db, source, error, now) {
+  const retryAt = isBazos(source) && isRateLimited(error)
+    ? new Date(Date.parse(now) + BAZOS_429_COOLDOWN_MS).toISOString()
+    : null;
+  db.prepare("UPDATE sk_crawl_sources SET phase='blocked',last_error=?,retry_at=? WHERE source=?")
+    .run(error.message, retryAt, source.id);
 }
 
 function startSource(db, source, now) {
@@ -80,7 +95,8 @@ export function crawlStatus(db) {
       WHERE source_db=? AND is_active=1 GROUP BY vehicle_type`).all(s.source);
     return {source:s.source,phase:s.phase,index_complete:Boolean(s.index_complete),
       sitemaps_remaining:JSON.parse(s.sitemap_queue).length,discovered:Object.values(counts).reduce((a,b)=>a+b,0),
-      counts,records,last_error:s.last_error,started_at:s.started_at,completed_at:s.completed_at};
+      counts,records,last_error:s.last_error,retry_at:s.retry_at,
+      started_at:s.started_at,completed_at:s.completed_at};
   });
   return {market:'SK',currency:'EUR',updated_at:new Date().toISOString(),
     complete:sources.length===SK_SOURCES.length&&sources.every(s=>s.phase==='complete'),
@@ -98,10 +114,12 @@ export async function runFullSkImport(db,{sources=SK_SOURCES,readerFactory=makeR
     if(!state||state.phase==='complete'&&refreshCompleted)state=startSource(db,source,now());
     if(state.phase==='complete')return;
     let read;
-    try { read=await readerFactory({...source,maxResponseBytes:32*1024*1024,requestDelayMs:600}); }
-    catch(e){db.prepare("UPDATE sk_crawl_sources SET phase='blocked',last_error=? WHERE source=?").run(e.message,source.id);return;}
+    try { read=await readerFactory({...source,maxResponseBytes:32*1024*1024,
+      requestDelayMs:isBazos(source) ? BAZOS_REQUEST_DELAY_MS : 600}); }
+    catch(e){blockSource(db,source,e,now());return;}
     if(state.phase==='blocked') {
-      db.prepare("UPDATE sk_crawl_sources SET phase=?,last_error=NULL WHERE source=?")
+      if(state.retry_at && state.retry_at>now()) return;
+      db.prepare("UPDATE sk_crawl_sources SET phase=?,last_error=NULL,retry_at=NULL WHERE source=?")
         .run(state.index_complete?'details':'index',source.id);
       state=db.prepare('SELECT * FROM sk_crawl_sources WHERE source=?').get(source.id);
     }
@@ -132,11 +150,11 @@ export async function runFullSkImport(db,{sources=SK_SOURCES,readerFactory=makeR
           .run(JSON.stringify(queue),JSON.stringify([...visited]),now(),source.id);
         onCheckpoint();
         if(visited.size%10===0)console.log('SK_FULL_INDEX_PROGRESS '+JSON.stringify({source:source.id,sitemaps:visited.size,remaining:queue.length}));
-      }catch(e){db.prepare("UPDATE sk_crawl_sources SET phase='blocked',last_error=? WHERE source=?").run(e.message,source.id);return;}
+      }catch(e){blockSource(db,source,e,now());return;}
     }
     if(queue.length)return;
     const indexCount=db.prepare('SELECT COUNT(*) n FROM sk_crawl_queue WHERE source=? AND generation=?').get(source.id,state.generation).n;
-    if(!indexCount){db.prepare("UPDATE sk_crawl_sources SET phase='blocked',last_error='Empty vehicle index' WHERE source=?").run(source.id);return;}
+    if(!indexCount){db.prepare("UPDATE sk_crawl_sources SET phase='blocked',last_error='Empty vehicle index',retry_at=NULL WHERE source=?").run(source.id);return;}
     db.prepare("UPDATE sk_crawl_sources SET phase='details',index_complete=1 WHERE source=?").run(source.id);
     const items=db.prepare(`SELECT * FROM sk_crawl_queue WHERE source=? AND generation=?
       AND state IN ('pending','error') AND (retry_at IS NULL OR retry_at<=?)
@@ -166,7 +184,7 @@ export async function runFullSkImport(db,{sources=SK_SOURCES,readerFactory=makeR
           const retry=new Date(Date.now()+Math.min(6*3600000,60000*2**Math.min(item.attempts,8))).toISOString();
           mark.run('error',checked,retry,e.message,source.id,item.id);
           if(item.attempts>=4||consecutiveErrors>=5||/robots disallows|access challenge|HTTP (401|403|429)/.test(e.message)){
-            blocked=true;db.prepare("UPDATE sk_crawl_sources SET phase='blocked',last_error=? WHERE source=?").run(e.message,source.id);
+            blocked=true;blockSource(db,source,e,checked);
           }
         }
       }

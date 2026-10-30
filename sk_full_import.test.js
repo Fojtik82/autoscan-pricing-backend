@@ -37,6 +37,19 @@ test('access failure checkpoints work and cannot declare a source complete or de
   assert.equal(status.complete,false);assert.equal(db.prepare('SELECT is_active FROM vehicle_app').get().is_active,1);
 });
 
+test('Bazos 429 pauses retries until its cooldown has elapsed',async t=>{
+  const db=fixture(t);const bazos={id:'bazos_sk',host:'auto.bazos.sk',sitemap:'/sitemap.php',indexMode:'categories'};
+  let current='2026-10-30T00:00:00.000Z',requests=0;
+  const limited=async()=>async()=>{requests++;throw Error('HTTP 429');};
+  let status=await runFullSkImport(db,{sources:[bazos],readerFactory:limited,now:()=>current});
+  assert.equal(status.sources[0].phase,'blocked');assert.equal(status.sources[0].retry_at,'2026-10-30T12:00:00.000Z');
+  status=await runFullSkImport(db,{sources:[bazos],readerFactory:limited,now:()=>current});
+  assert.equal(requests,1);assert.equal(status.sources[0].phase,'blocked');
+  current='2026-10-30T12:00:00.000Z';
+  await runFullSkImport(db,{sources:[bazos],readerFactory:limited,now:()=>current});
+  assert.equal(requests,2);
+});
+
 test('portal equipment, original description and all three vehicle categories survive SQLite and comps',t=>{
   const db=fixture(t);
   const a=ad('A1');const row=parseSkDetail(page(a),url('A1'));
