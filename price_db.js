@@ -434,6 +434,8 @@ export function initVehicleDb(dbPath) {
         vehicles = extended.vehicles;
         usedAttempt = extended.usedAttempt;
         const sourceCounts = countMarketSources(candidates);
+        const extendedPartialSpecs = request.comparisonPolicy
+          ? summarizePartialSpecs(candidates, request) : null;
         return {
           found: true,
           matching: {
@@ -450,8 +452,13 @@ export function initVehicleDb(dbPath) {
             mileage_effective_comparables: Math.round(extrapolatedEffectiveCount * 100) / 100,
             mileage_minimum_effective_comparables: MIN_EFFECTIVE_COMPARABLES,
             price_method: MILEAGE_EXTRAPOLATION_METHOD, confidence: 'low',
+            ...(extendedPartialSpecs ? { comparison_policy: request.comparisonPolicy,
+              transmission_fully_confirmed: extendedPartialSpecs.transmission_unknown === 0,
+              drive_fully_confirmed: extendedPartialSpecs.drive_unknown === 0 } : {}),
           },
           count: candidates.length, source_counts: sourceCounts,
+          ...(extendedPartialSpecs ? { comparison_policy: request.comparisonPolicy,
+            partial_specs: extendedPartialSpecs } : {}),
           price_czk: roundPrice(weightedPercentile(adjusted, 0.5)),
           low_czk: roundPrice(weightedPercentile(adjusted, 0.15)),
           high_czk: roundPrice(weightedPercentile(adjusted, 0.85)),

@@ -166,6 +166,33 @@ test('high-mileage fallback extrapolates only a bounded, variant-matched sample'
   assert.ok(result.price_czk > 0);
 });
 
+test('extended mileage preserves opt-in unknown-spec metadata for the extended sample', t => {
+  const rows = [
+    { mileage: 100000, price: 300000 }, { mileage: 140000, price: 280000 },
+    { mileage: 180000, price: 260000 }, { mileage: 220000, price: 240000 },
+    { mileage: 180000, price: 260000, drive: '', drive_norm: '', transmission: '', transmission_norm: '',
+      source_url: 'https://auto.bazos.cz/inzerat/190000001/vehicle.php', source_db: 'bazos' },
+    { mileage: 180000, price: 9999999, drive: 'awd', drive_norm: 'awd', title: 'Octavia 4x4' },
+    { mileage: 180000, price: 9999999, transmission: 'automatic', transmission_norm: 'automatic', title: 'Octavia DSG' },
+  ];
+  const api = fixture(t, rows), wanted = { ...input, mileage: 340000, transmission: 'manual', drive: 'fwd' };
+  const strict = api.estimatePrice(wanted);
+  assert.equal(strict.found, true); assert.equal(strict.count, 4);
+  assert.equal(strict.comparison_policy, undefined); assert.equal(strict.partial_specs, undefined);
+  const result = api.estimatePrice({ ...wanted, comparison_policy: 'annotated_missing_specs_v1' });
+  assert.equal(result.found, true); assert.equal(result.count, 5);
+  assert.equal(result.matching.price_method, 'mileage_extrapolated_weighted_median_v1');
+  assert.equal(result.comparison_policy, 'annotated_missing_specs_v1');
+  assert.equal(result.matching.comparison_policy, result.comparison_policy);
+  assert.equal(result.partial_specs.policy, result.comparison_policy);
+  assert.equal(result.partial_specs.partial_count, 1);
+  assert.equal(result.partial_specs.drive_unknown, 1); assert.equal(result.partial_specs.transmission_unknown, 1);
+  assert.equal(result.matching.drive_fully_confirmed, false); assert.equal(result.matching.transmission_fully_confirmed, false);
+  assert.equal(result.partial_specs.by_source.sauto.count, 4); assert.equal(result.partial_specs.by_source.bazos.count, 1);
+  assert.equal(result.source_counts.sauto, 4); assert.equal(result.source_counts.bazos, 1);
+  assert.ok(result.price_czk < 1000000, 'Known conflicting variants cannot affect the quote');
+});
+
 test('known mileage is considered before the 5000-candidate cap and the 120-price cap', t => {
   const api = fixture(t, [
     ...Array(5001).fill({ mileage: null, price: 5000000 }),
