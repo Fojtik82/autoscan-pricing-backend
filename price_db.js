@@ -308,6 +308,22 @@ function buildWhere(request, attempt, supportsActiveFlag = false, supportsFreshn
   return { where: where.join(" AND "), params };
 }
 
+// Some portals omit fuel on otherwise well-described ads.  Treat it as an
+// inferred constraint only if it is supported by at least two listings and
+// every listing that does name a powertrain agrees.  This never guesses
+// between petrol, diesel or hybrid variants.
+function consensusPowertrain(vehicles) {
+  const counts = new Map();
+  for (const vehicle of vehicles) {
+    const powertrain = vehicle.powertrain;
+    if (!powertrain || powertrain === 'hybrid') continue;
+    counts.set(powertrain, (counts.get(powertrain) || 0) + 1);
+  }
+  if (counts.size !== 1) return null;
+  const [powertrain, count] = counts.entries().next().value;
+  return count >= 2 ? powertrain : null;
+}
+
 export function initVehicleDb(dbPath) {
   const resolvedPath = path.resolve(dbPath);
   const db = new Database(resolvedPath, { readonly: true, fileMustExist: true });
@@ -394,7 +410,21 @@ export function initVehicleDb(dbPath) {
   }
 
   function estimatePrice(input) {
-    let { request, vehicles, usedAttempt } = fetchCandidates(input, 5000, true);
+    let queryInput = input;
+    let { request, vehicles, usedAttempt } = fetchCandidates(queryInput, 5000, true);
+    // A missing user-supplied powertrain remains a blocker unless the initial
+    // set provides unambiguous evidence.  Re-run with the inferred constraint
+    // so all subsequent mileage fallbacks remain variant-safe.
+    if (!request.fuelNorm && !request.fuelSpecified) {
+      const inferredPowertrain = consensusPowertrain(vehicles.slice(0, 120));
+      if (inferredPowertrain) {
+        // `normalizePowertrain` accepts user-facing fuel labels; pass the
+        // canonical value there as well so the SQL constraint is applied.
+        queryInput = { ...input, fuel: inferredPowertrain, powertrain: inferredPowertrain };
+        ({ request, vehicles, usedAttempt } = fetchCandidates(queryInput, 5000, true));
+        request.powertrainInferred = true;
+      }
+    }
     const selected = vehicles.slice(0, Math.min(120, Math.max(vehicles.length, 0)));
     const prices = selected.map((vehicle) => vehicle.price_czk).filter(Boolean);
     const weighted = request.mileageKm ? selected.map(vehicle => ({
@@ -416,7 +446,7 @@ export function initVehicleDb(dbPath) {
     // then normalize observed prices to the requested mileage from the
     // observed median mileage slope. This is deliberately low confidence.
     if (!request.invalidMileage && request.mileageKm && (prices.length < 3 || insufficientMileageSupport) && !unconfirmed) {
-      const extended = fetchCandidates(input, 5000, true, 6);
+      const extended = fetchCandidates(queryInput, 5000, true, 6);
       const candidates = extended.vehicles.slice(0, 120)
         .filter(vehicle => vehicle.price_czk && vehicle.mileage > 0);
       const mileageValues = candidates.map(vehicle => vehicle.mileage);
@@ -440,6 +470,7 @@ export function initVehicleDb(dbPath) {
           found: true,
           matching: {
             schema_version: 1, powertrain: request.fuelNorm || null,
+            powertrain_inferred: Boolean(request.powertrainInferred),
             powertrain_applied: Boolean(request.fuelNorm), engine: request.motor || null,
             engine_applied: Boolean(request.motor), trim: request.modelDetail || null,
             trim_applied: Boolean(request.detailNorm), power_applied: Boolean(request.kw),
@@ -470,6 +501,7 @@ export function initVehicleDb(dbPath) {
     }
     const matching = {
       schema_version: 1, powertrain: request.fuelNorm || null,
+      powertrain_inferred: Boolean(request.powertrainInferred),
       powertrain_applied: Boolean(request.fuelNorm) && !unconfirmed,
       engine: request.motor || null, engine_applied: Boolean(request.motor),
       trim: request.modelDetail || null, trim_applied: Boolean(request.detailNorm),

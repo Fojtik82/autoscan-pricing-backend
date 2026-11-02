@@ -127,6 +127,20 @@ test('three similar known-mileage offers suffice even with unequal distances', t
   assert.equal(result.price_czk, 210000);
 });
 
+test('a missing powertrain is inferred only from an unambiguous listing consensus', t => {
+  const api = fixture(t, [
+    { mileage: 95000, price: 220000, fuel: 'Diesel', title: 'Octavia 2.0 TDI', motor: '2.0 TDI' },
+    { mileage: 102000, price: 210000, fuel: 'Diesel', title: 'Octavia 2.0 TDI', motor: '2.0 TDI' },
+    { mileage: 106000, price: 205000, fuel: 'Diesel', title: 'Octavia 2.0 TDI', motor: '2.0 TDI' },
+    { mileage: 110000, price: 200000, fuel: '', title: 'Octavia 2.0 TDI', motor: '2.0 TDI' },
+  ]);
+  const result = api.estimatePrice({ brand: 'Skoda', model: 'Octavia', year: 2020, mileage: 100000 });
+  assert.equal(result.found, true);
+  assert.equal(result.matching.powertrain, 'diesel');
+  assert.equal(result.matching.powertrain_inferred, true);
+  assert.equal(result.matching.powertrain_applied, true);
+});
+
 test('unknown mileage does not satisfy minimum comparable support', t => {
   const api = fixture(t, [...lowMileage.slice(0, 2), ...Array(30).fill({ mileage: null })]);
   const result = api.estimatePrice({ ...input, mileage: 100000 });
