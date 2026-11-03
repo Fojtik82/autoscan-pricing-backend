@@ -1,0 +1,241 @@
+{
+  "ok": true,
+  "ref": "9b37c9f29eb0355a4b503f28289860db4d273240",
+  "archives": [
+    {
+      "commit": "9919e8ca8fae063107084d5842309c153e5ffb72",
+      "observations": 85973
+    },
+    {
+      "commit": "d1c1dfc9d372194ed9872a812251c12164fe08cd",
+      "observations": 94496
+    },
+    {
+      "commit": "96eb63cd3c280d485081ad94cebb759094cb7a64",
+      "observations": 106423
+    },
+    {
+      "commit": "f029676672170c02ab760dce65708139b1c2b025",
+      "observations": 111499
+    },
+    {
+      "commit": "30ddb840941d40f85bc620c3c26a7569c9b75853",
+      "observations": 114141
+    },
+    {
+      "commit": "75dc8452daa2325a255d222505b52f4671a70bad",
+      "observations": 115555
+    },
+    {
+      "commit": "c77148f759cb8e484b1aec3a04c03f0430359b8a",
+      "observations": 120603
+    },
+    {
+      "commit": "327ce1e4ba52d2d62a688d70646264173e851aed",
+      "observations": 124839
+    },
+    {
+      "commit": "fea0535030a0c04cf4c0dfbf8506c472fe365333",
+      "observations": 129336
+    },
+    {
+      "commit": "428dc2a6562e2dfc1c4a7a9c5a8bb00ae7d39580",
+      "observations": 136046
+    },
+    {
+      "commit": "6dffaa897deae629bdb4bc1dda00d9daf7240d0f",
+      "observations": 141293
+    },
+    {
+      "commit": "7f45e162390029e4b7fc74201e616213213f7dcf",
+      "observations": 147606
+    },
+    {
+      "commit": "cc8e8b4232c85ff529cfae6a9009245ff937fe4f",
+      "observations": 153426
+    },
+    {
+      "commit": "7ee7f4f577b343fe2eeb1cc8598670b4f9304c63",
+      "observations": 158706
+    },
+    {
+      "commit": "996cb025dc06800e793700306100a99f8b6c9959",
+      "observations": 163157
+    },
+    {
+      "commit": "7e9811143819d32a1a16771aaec94bea72aeb027",
+      "observations": 166880
+    },
+    {
+      "commit": "910e034510ff857802a788bda8ae0528d86ce29c",
+      "observations": 173382
+    },
+    {
+      "commit": "4194dd007cb2147313fb4f9d6b861b0d7eda6355",
+      "observations": 178934
+    },
+    {
+      "commit": "df95540fef74e253fb2162077276ade2d6b767ef",
+      "observations": 184573
+    },
+    {
+      "commit": "9821701f0d956ad6841d517f142c0bee7896d843",
+      "observations": 189946
+    },
+    {
+      "commit": "08d554473975945bb2922fa568bc6de0f95b15db",
+      "observations": 195545
+    },
+    {
+      "commit": "a50096c4b05450d6d9f70b785cca898d8303e101",
+      "observations": 199362
+    },
+    {
+      "commit": "7f2216228dc97fcfd7afe4f1f316985b3c47f0cc",
+      "observations": 203056
+    },
+    {
+      "commit": "b3687eb72f8a608a5e2a47637502606aeebe9950",
+      "observations": 207854
+    },
+    {
+      "commit": "8536ca384266a60052ed9f5946c7b7251fc123f6",
+      "observations": 213205
+    },
+    {
+      "commit": "43f1af858c10849dd689697a1646aa70390be8c2",
+      "observations": 219674
+    },
+    {
+      "commit": "d3959e7b45a72bdf0b4e7f09630e4e410bded3c0",
+      "observations": 225900
+    },
+    {
+      "commit": "ead567b9965c143b41dec8cf2eaf68ab5a37af26",
+      "observations": 231344
+    },
+    {
+      "commit": "2f60133d8ab22a9e2e75e6692972f14345e0a3dd",
+      "observations": 235430
+    },
+    {
+      "commit": "da5f61dde000cbb02d8ae735a461b873be147a63",
+      "observations": 239083
+    },
+    {
+      "commit": "8c263da34bf52f60211a049bbc58496d550889d0",
+      "observations": 245614
+    },
+    {
+      "commit": "06e0aba5c02dcc861f8f4ada229b1b31cd990223",
+      "observations": 250865
+    },
+    {
+      "commit": "2c98f352df79017ba9ad3f0b75e7db322b14353e",
+      "observations": 257203
+    },
+    {
+      "commit": "8470f353fc07b90ae6c83cfe0aee7527b637b5b7",
+      "observations": 263191
+    },
+    {
+      "commit": "c264bbc238d97724967ae03ff4ee0024925189cd",
+      "observations": 268493
+    },
+    {
+      "commit": "feea72dbfc729928e4c57f337885786fc6573e14",
+      "observations": 272478
+    },
+    {
+      "commit": "09e51da932d7fdf77ced2d61042f234c57f1bc53",
+      "observations": 276203
+    },
+    {
+      "commit": "28fabfa475ce2b7cc262e9913d5bd71e98c09bfd",
+      "observations": 283071
+    },
+    {
+      "commit": "e6887084bd5fc20b25ac5cb14178d74405bae8de",
+      "observations": 288451
+    },
+    {
+      "commit": "03dac15a788dea4d9f95fb6617b100ae12ac8ec9",
+      "observations": 293602
+    },
+    {
+      "commit": "b7d028e946780f61b40cdb219e1e440f04611ddc",
+      "observations": 298865
+    },
+    {
+      "commit": "d384cb7a7e38f7eec9374b855f2f1641b198f1bd",
+      "observations": 304468
+    },
+    {
+      "commit": "52337a1397431dc0e00fba3ed27046f5b53c6862",
+      "observations": 308859
+    },
+    {
+      "commit": "cfb699daa7303fcb4de6493634bddd9e012b0fd6",
+      "observations": 312853
+    },
+    {
+      "commit": "95d6ca24c8fbda02f0c40c373f6067f60cc5f3e4",
+      "observations": 319566
+    },
+    {
+      "commit": "c78c20d105de1df4f8690dacab8fef6401d64a00",
+      "observations": 327815
+    },
+    {
+      "commit": "23b7fb15a4cb211b662093b0aa4eb8bda199fb88",
+      "observations": 333336
+    },
+    {
+      "commit": "8e6c99031a15bff59895991998f41bad02cb0134",
+      "observations": 338789
+    },
+    {
+      "commit": "66a762233933fc496ad0d7d0cb8fd448e472fddb",
+      "observations": 343004
+    },
+    {
+      "commit": "17b62cce966140840f2da1acc951cb1c138de3fe",
+      "observations": 346866
+    },
+    {
+      "commit": "c62d3ad371c760007699602f6a0d3061b19ef2a2",
+      "observations": 352852
+    },
+    {
+      "commit": "0f0f925d7fbfcd36509acab39e3c37084c080a91",
+      "observations": 358091
+    },
+    {
+      "commit": "9611c63d4a0fa9bf0c8547f46c02a385a2e65263",
+      "observations": 362798
+    },
+    {
+      "commit": "dc64a099704dfbef91eb2b4ee06c6a61629883a4",
+      "observations": 367652
+    },
+    {
+      "commit": "d2848318cc44e7660af5c1e20cc3eff0a4d47c78",
+      "observations": 372733
+    },
+    {
+      "commit": "f0ee8789dcdb5945b11a12b2e5fcee18b465a70d",
+      "observations": 376741
+    },
+    {
+      "commit": "fcc536cea5c01ac191551e2ddec30dac8096a192",
+      "observations": 385377
+    }
+  ],
+  "unique_historical_ads": 383156,
+  "rows_improved": 356262,
+  "row_count": 566178,
+  "with_first_observation": 403054,
+  "bounded_arrivals": 0,
+  "rows_with_archive_evidence": 356262,
+  "publication_dates_reconstructed": false
+}
