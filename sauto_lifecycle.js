@@ -1,3 +1,4 @@
+import { ensureFirstSeenSchema, recordFirstSeenIndex } from "./listing_first_seen.js";
 const DEFAULT_TABLE = "vehicle_app";
 
 const SAUTO_URL_RE = /^https?:\/\/(?:www\.)?sauto\.cz\/(?:osobni|uzitkova|motorky|ctyrkolky)\/detail\/[^/]+\/[^/]+\/(\d+)(?:[/?#]|$)/i;
@@ -49,6 +50,10 @@ export function hasSautoLifecycleSchema(db, table = DEFAULT_TABLE) {
   );
   return [
     "is_active",
+    "first_seen_at",
+    "first_seen_after_at",
+    "first_seen_is_observed",
+    "first_seen_evidence",
     "last_seen_at",
     "last_checked_at",
     "missing_since",
@@ -78,6 +83,7 @@ export function ensureSautoLifecycleSchema(db, table = DEFAULT_TABLE) {
     }
   }
 
+  ensureFirstSeenSchema(db, table);
   db.exec(
     `CREATE INDEX IF NOT EXISTS idx_${table}_is_active ON ${JSON.stringify(table)}(is_active)`,
   );
@@ -93,17 +99,25 @@ export function reconcileSautoLifecycle(
     dryRun = false,
   } = {},
 ) {
+  if (!dryRun) ensureSautoLifecycleSchema(db, table);
   const normalizedLiveIds = new Set([...liveIds].map((value) => Number(value)));
   const nowIso = now.toISOString();
   const graceChecks = Math.max(1, Math.round(Number(missingChecksBeforeInactive) || 3));
   const rows = db.prepare(
-    `SELECT rowid, source_url, is_active, last_seen_at, last_checked_at, missing_since,
+    `SELECT rowid, source_url, is_active, first_seen_at, first_seen_after_at,
+            first_seen_is_observed, first_seen_evidence, last_seen_at, last_checked_at, missing_since,
             missing_checks, inactive_at
        FROM ${JSON.stringify(table)}
       WHERE source_url IS NOT NULL
         AND TRIM(source_url) <> ''
         AND lower(source_url) LIKE '%sauto.cz%'`,
   ).all();
+
+  if (!dryRun) recordFirstSeenIndex(db, {
+    source: 'sauto', liveKeys: [...normalizedLiveIds].map(id => `sauto:${id}`), rows,
+    keyForUrl: url => { const id = parseSautoListingId(url); return id ? `sauto:${id}` : null; },
+    now: nowIso, table,
+  });
 
   const markSeen = dryRun ? null : db.prepare(
     `UPDATE ${JSON.stringify(table)}

@@ -1,3 +1,4 @@
+import { ensureFirstSeenSchema, recordFirstSeenIndex } from "./listing_first_seen.js";
 const DEFAULT_TABLE = "vehicle_app";
 const BAZOS_URL_RE = /^https?:\/\/(auto|motorky)\.bazos\.cz\/inzerat\/(\d+)\/[^/?#]+(?:[?#].*)?$/i;
 
@@ -25,11 +26,13 @@ export function reconcileBazosLifecycle(
     dryRun = false,
   } = {},
 ) {
+  if (!dryRun) ensureFirstSeenSchema(db, table);
   const normalizedLiveKeys = new Set([...liveKeys].map((value) => String(value)));
   const nowIso = now.toISOString();
   const graceChecks = Math.max(1, Math.round(Number(missingChecksBeforeInactive) || 3));
   const rows = db.prepare(
-    `SELECT rowid, source_url, is_active, last_seen_at, last_checked_at,
+    `SELECT rowid, source_url, is_active, first_seen_at, first_seen_after_at,
+            first_seen_is_observed, first_seen_evidence, last_seen_at, last_checked_at,
             missing_since, missing_checks, inactive_at
        FROM ${JSON.stringify(table)}
       WHERE source_url IS NOT NULL
@@ -39,6 +42,12 @@ export function reconcileBazosLifecycle(
           OR lower(source_url) LIKE 'https://motorky.bazos.cz/inzerat/%'
         )`,
   ).all();
+
+  if (!dryRun) recordFirstSeenIndex(db, {
+    source: 'bazos', liveKeys: [...normalizedLiveKeys].map(key => `bazos:${key}`), rows,
+    keyForUrl: url => { const listing = parseBazosListing(url); return listing ? `bazos:${listing.key}` : null; },
+    now: nowIso, table,
+  });
 
   const markSeen = dryRun ? null : db.prepare(
     `UPDATE ${JSON.stringify(table)}

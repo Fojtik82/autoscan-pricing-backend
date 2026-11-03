@@ -1,0 +1,84 @@
+name: Repair listing first observations
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: carprice-vehicle-database-main
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.repository == 'Fojtik82/autoscan-pricing-backend' && github.ref == 'refs/heads/main' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: write
+    steps:
+      - name: Read current backend and database
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Use the backend Node version
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+          package-manager-cache: false
+
+      - name: Verify repair and lifecycle behavior
+        run: |
+          npm install --no-audit --no-fund --package-lock=false
+          node --test listing_first_seen.test.js sauto_lifecycle.test.js bazos_lifecycle.test.js bazos_scraper.test.js vehicle_db_archive.test.js deploy_repair.test.js price_db.test.js comps_coverage.test.js
+          python3 -m unittest -v test_first_seen_backfill.py
+
+      - name: Restore first observations from immutable historical archives
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'JS'
+          import Database from 'better-sqlite3';
+          import { ensureVehicleDatabase } from './vehicle_db_archive.js';
+          import { ensureSautoLifecycleSchema } from './sauto_lifecycle.js';
+          await ensureVehicleDatabase('data/vehicles_ai.db');
+          const db = new Database('data/vehicles_ai.db');
+          ensureSautoLifecycleSchema(db);
+          db.close();
+          JS
+          python3 first_seen_backfill.py --database data/vehicles_ai.db --ref "$(git rev-parse HEAD)" --report data/first-seen-backfill-report.json
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import { compressVehicleDatabase } from './vehicle_db_archive.js';
+          const archive = await compressVehicleDatabase('data/vehicles_ai.db');
+          if (fs.statSync(archive).size >= 100 * 1024 * 1024) throw new Error('Database archive exceeds GitHub file limit');
+          JS
+
+      - name: Publish verified database and provenance report
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'CarPrice DB Bot'
+          git config user.email 'carprice-db-bot@users.noreply.github.com'
+          git add data/vehicles_ai.db.gz data/first-seen-backfill-report.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Recover listing first observations from historical snapshots'
+            cat > "$RUNNER_TEMP/first-seen-askpass.sh" <<'SH'
+          #!/bin/sh
+          printf '%s\n' "$GITHUB_TOKEN"
+          SH
+            chmod 700 "$RUNNER_TEMP/first-seen-askpass.sh"
+            GIT_ASKPASS="$RUNNER_TEMP/first-seen-askpass.sh" GIT_TERMINAL_PROMPT=0 git -c credential.helper= push https://x-access-token@github.com/Fojtik82/autoscan-pricing-backend.git HEAD:main
+          fi
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          report = json.load(open('data/first-seen-backfill-report.json'))
+          print('## Historical first observations repaired\n')
+          for key in ['row_count', 'unique_historical_ads', 'rows_improved', 'with_first_observation', 'bounded_arrivals']:
+              print(f'- {key}: {report[key]}')
+          print(f'- historical archives: {len(report["archives"])}')
+          print('\nHistorical observations remain left censored; they are not publication dates or confirmed sales.')
+          PY
