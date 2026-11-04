@@ -1,0 +1,55 @@
+{
+  "update": {
+    "enabled": true,
+    "model_version": "5d7975e410c1245f3d6b",
+    "issued": 5000,
+    "resolved": 0,
+    "censored": 0,
+    "started_at": "2026-11-04T08:44:06.734Z",
+    "first_due_at": "2026-12-04T08:44:06.734Z",
+    "cohort_cap": 5000
+  },
+  "status": {
+    "enabled": true,
+    "model_version": "5d7975e410c1245f3d6b",
+    "started_at": "2026-11-04T08:44:06.734Z",
+    "issue_until": "2026-11-05T08:44:06.734Z",
+    "first_due_at": "2026-12-04T08:44:06.734Z",
+    "cohort_cap": 5000,
+    "state": "collecting_outcomes",
+    "target": "confirmed_inactive_at_horizon",
+    "population": "already_advertised",
+    "production_ready": false,
+    "forecast_count": 5000,
+    "issued_by_source": {
+      "sauto": 2500,
+      "bazos": 2500
+    },
+    "pending": 5000,
+    "censored": 0,
+    "overall": {
+      "n": 0,
+      "brier": null,
+      "baseline_brier": null,
+      "calibration_error": null,
+      "bins": []
+    },
+    "by_source": {
+      "sauto": {
+        "n": 0,
+        "brier": null,
+        "baseline_brier": null,
+        "calibration_error": null,
+        "bins": []
+      },
+      "bazos": {
+        "n": 0,
+        "brier": null,
+        "baseline_brier": null,
+        "calibration_error": null,
+        "bins": []
+      }
+    }
+  },
+  "inventory_rows_unchanged": 571166
+}
