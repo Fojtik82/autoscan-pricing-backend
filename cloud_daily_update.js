@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { updateSaleabilityPilot } from "./saleability_pilot.js";
 import { updateNicheSources } from "./niche_sources.js";
 import {
   applyExistingPriceRefresh,
@@ -1114,6 +1115,12 @@ async function main() {
     dryRun: DRY_RUN, missingChecks: MISSING_CHECKS_BEFORE_INACTIVE,
   });
   const nicheFailed = nicheSources.some((source) => !source.ok);
+  const pilotModelPath = path.join(repoDir, 'data', 'saleability-model.json');
+  const saleabilityPilot = DRY_RUN ? { skipped: true, reason: 'dry_run' } : updateSaleabilityPilot(db,
+    fs.existsSync(pilotModelPath) ? JSON.parse(fs.readFileSync(pilotModelPath, 'utf8')) : null, {
+      completeSources: [...(liveIndex ? ['sauto'] : []), ...(bazosLiveIndex ? ['bazos'] : [])],
+      pricedSources: priceRefresh.filter(source => source.ok && source.complete).map(source => source.source),
+    });
   const afterCount = db.prepare(`SELECT COUNT(*) AS count FROM ${TABLE}`).get().count;
   db.close();
 
@@ -1151,6 +1158,7 @@ async function main() {
     bazos_lifecycle: bazosLifecycle,
     niche_sources: nicheSources,
     price_refresh: priceRefresh,
+    saleability_pilot: saleabilityPilot,
     pushed: gitResult.pushed,
     commit: gitResult.commit,
     result: gitResult.reason,

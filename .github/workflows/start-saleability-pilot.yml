@@ -1,0 +1,77 @@
+name: Start saleability verification pilot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: carprice-vehicle-database-main
+  cancel-in-progress: false
+
+jobs:
+  start:
+    if: github.repository == 'Fojtik82/autoscan-pricing-backend' && github.ref == 'refs/heads/main' && github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Read current backend and database
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Use the backend Node version
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+          package-manager-cache: false
+
+      - name: Verify pilot, scoring and source reconciliation
+        run: |
+          npm install --no-audit --no-fund --package-lock=false
+          node --test saleability.test.js listing_first_seen.test.js sauto_lifecycle.test.js bazos_lifecycle.test.js bazos_scraper.test.js vehicle_db_archive.test.js deploy_repair.test.js price_db.test.js comps_coverage.test.js
+          python3 -m unittest -v test_first_seen_backfill.py
+
+      - name: Freeze prospective predictions
+        run: |
+          node --input-type=module <<'JS'
+          import { ensureVehicleDatabase } from './vehicle_db_archive.js';
+          await ensureVehicleDatabase('data/vehicles_ai.db');
+          JS
+          node saleability_pilot_cli.js --database data/vehicles_ai.db --model data/saleability-model.json --report data/saleability-pilot-start.json
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import { compressVehicleDatabase } from './vehicle_db_archive.js';
+          const archive = await compressVehicleDatabase('data/vehicles_ai.db');
+          if (fs.statSync(archive).size >= 100 * 1024 * 1024) throw new Error('Database archive exceeds GitHub file limit');
+          JS
+
+      - name: Publish pilot cohort and report
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'CarPrice DB Bot'
+          git config user.email 'carprice-db-bot@users.noreply.github.com'
+          git add data/vehicles_ai.db.gz data/saleability-pilot-start.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Freeze prospective saleability pilot predictions'
+            cat > "$RUNNER_TEMP/saleability-askpass.sh" <<'SH'
+          #!/bin/sh
+          printf '%s\n' "$GITHUB_TOKEN"
+          SH
+            chmod 700 "$RUNNER_TEMP/saleability-askpass.sh"
+            GIT_ASKPASS="$RUNNER_TEMP/saleability-askpass.sh" GIT_TERMINAL_PROMPT=0 git -c credential.helper= push https://x-access-token@github.com/Fojtik82/autoscan-pricing-backend.git HEAD:main
+          fi
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          report = json.load(open('data/saleability-pilot-start.json'))['status']
+          print('## Prospective saleability pilot\n')
+          for key in ['model_version', 'started_at', 'first_due_at', 'forecast_count', 'pending']:
+              print(f'- {key}: {report[key]}')
+          print('\nPredictions are experimental and concern ad inactivity, not confirmed sales.')
+          print('The existing daily collector evaluates the frozen cohort after maturity; it does not rewrite predictions.')
+          PY

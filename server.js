@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { registerSaleabilityApi } from "./saleability_api.js";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -354,6 +355,8 @@ app.get("/price/health", (_req, res) => {
   }
   return res.json(vehicleDb.health());
 });
+
+registerSaleabilityApi(app, VEHICLES_DB_PATH);
 
 app.post("/price/estimate", (req, res) => {
   if (!vehicleDbRequired(res)) return;

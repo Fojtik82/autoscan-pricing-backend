@@ -1,0 +1,180 @@
+{
+  "total_cohort": 137482,
+  "resolved_labels": 133351,
+  "censoring": {
+    "censored_pending_absence": 4121,
+    "censored_missing_evidence": 10
+  },
+  "unavailable": {
+    "missing_or_unsupported_query": 82205,
+    "insufficient_model_support": 35068
+  },
+  "overall": {
+    "n": 16078,
+    "brier": 0.2545601553826834,
+    "baseline_brier": 0.2487662090005335,
+    "brier_improvement": -0.005793946382149869,
+    "calibration_error": 0.07776477474730348,
+    "mean_prediction": 0.6299403152593172,
+    "actual_rate": 0.559024754322677,
+    "bins": [
+      {
+        "from": 0.5,
+        "to": 0.6,
+        "n": 4537,
+        "predicted": 0.5505706789015566,
+        "actual": 0.5627066343398721
+      },
+      {
+        "from": 0.6,
+        "to": 0.7,
+        "n": 9453,
+        "predicted": 0.6435651934917965,
+        "actual": 0.5503014915899714
+      },
+      {
+        "from": 0.7,
+        "to": 0.8,
+        "n": 2088,
+        "predicted": 0.7407181247536185,
+        "actual": 0.5905172413793104
+      }
+    ]
+  },
+  "by_source": {
+    "sauto": {
+      "n": 0,
+      "brier": null,
+      "baseline_brier": null,
+      "calibration_error": null,
+      "bins": []
+    },
+    "bazos": {
+      "n": 16078,
+      "brier": 0.2545601553826834,
+      "baseline_brier": 0.2487662090005335,
+      "brier_improvement": -0.005793946382149869,
+      "calibration_error": 0.07776477474730348,
+      "mean_prediction": 0.6299403152593172,
+      "actual_rate": 0.559024754322677,
+      "bins": [
+        {
+          "from": 0.5,
+          "to": 0.6,
+          "n": 4537,
+          "predicted": 0.5505706789015566,
+          "actual": 0.5627066343398721
+        },
+        {
+          "from": 0.6,
+          "to": 0.7,
+          "n": 9453,
+          "predicted": 0.6435651934917965,
+          "actual": 0.5503014915899714
+        },
+        {
+          "from": 0.7,
+          "to": 0.8,
+          "n": 2088,
+          "predicted": 0.7407181247536185,
+          "actual": 0.5905172413793104
+        }
+      ]
+    }
+  },
+  "unseen_listing_ids": {
+    "n": 15222,
+    "brier": 0.26009855699499224,
+    "baseline_brier": 0.2540462090102084,
+    "brier_improvement": -0.006052347984783813,
+    "calibration_error": 0.09683202250380382,
+    "mean_prediction": 0.6310587995370266,
+    "actual_rate": 0.5342267770332414,
+    "bins": [
+      {
+        "from": 0.5,
+        "to": 0.6,
+        "n": 4156,
+        "predicted": 0.5504250564836313,
+        "actual": 0.5226179018286814
+      },
+      {
+        "from": 0.6,
+        "to": 0.7,
+        "n": 9048,
+        "predicted": 0.6436404002394239,
+        "actual": 0.5301724137931034
+      },
+      {
+        "from": 0.7,
+        "to": 0.8,
+        "n": 2018,
+        "predicted": 0.7407096979388613,
+        "actual": 0.5763131813676908
+      }
+    ]
+  },
+  "cross_source_vehicle_deduplication": false,
+  "production_approved": false,
+  "method": "existing-ad-inactivity-30d-v1",
+  "tested_model_version": "e120d9c9a20e90566ab4",
+  "pilot_model_version": "5d7975e410c1245f3d6b",
+  "temporally_tested_sources": [
+    "bazos"
+  ],
+  "not_temporally_tested_sources": [
+    "sauto"
+  ],
+  "training_cohort": 7644,
+  "training_resolved": 7430,
+  "training_censoring": {
+    "censored_pending_absence": 214
+  },
+  "train_start": {
+    "bazos": "2026-09-02T11:56:04.439Z"
+  },
+  "train_end": {
+    "sauto": "2026-10-02T16:23:11.062Z",
+    "bazos": "2026-10-02T16:23:13.406Z"
+  },
+  "test_start": {
+    "sauto": "2026-10-04T15:44:42.035Z",
+    "bazos": "2026-10-04T15:44:44.464Z"
+  },
+  "test_end": {
+    "sauto": "2026-11-03T18:01:44.620Z",
+    "bazos": "2026-11-03T18:01:50.033Z"
+  },
+  "price_references": "Only the feature snapshot available at prediction time; never endpoint prices.",
+  "model_selection": "Fixed hierarchical empirical rates, minimum 50 labels, prior strength 20. No holdout tuning.",
+  "limitations": [
+    "Historical coverage is a sample of known ads.",
+    "Endpoint inactivity is not a confirmed sale.",
+    "Predictions concern already advertised cars, not newly posted ads.",
+    "Vehicle duplicates across portals remain.",
+    "One chronological holdout does not establish seasonal stability."
+  ],
+  "provenance": {
+    "train_start": {
+      "cutoff": "2026-09-03",
+      "sha": "d1c1dfc9d372194ed9872a812251c12164fe08cd",
+      "date": "2026-09-02T11:56:21Z"
+    },
+    "train_end": {
+      "cutoff": "2026-10-02",
+      "sha": "ead567b9965c143b41dec8cf2eaf68ab5a37af26",
+      "date": "2026-10-02T18:34:34Z"
+    },
+    "test_start": {
+      "sha": "da5f61dde000cbb02d8ae735a461b873be147a63",
+      "date": "2026-10-04T17:54:18Z"
+    },
+    "test_end": {
+      "sha": "2b1bc2216b51a86512714995fb1b81934946ab02",
+      "commit": "Cloud update vehicles_ai.db 2026-11-03T19:14",
+      "date": "2026-11-03T19:14:30Z"
+    }
+  },
+  "simulated_train_issue_at": "2026-09-02T11:56:21Z",
+  "simulated_test_issue_at": "2026-10-04T17:54:18Z"
+}
