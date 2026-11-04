@@ -203,6 +203,7 @@ function normalizeRequest(input = {}) {
     detailNorm: fold(modelDetail),
     detailCompact: compact(modelDetail),
     year: parseYear(input.year),
+    exactYear: input.exact_year === true || input.exact_year === 'true',
     mileageKm: mileageKm ? Math.round(mileageKm) : null,
     invalidMileage: rawMileage != null && String(rawMileage).trim() !== '' && mileageKm === null,
     fuelNorm: normalizePowertrain({ ...input, motor: input.motor || input.engine, title: modelDetail }),
@@ -348,7 +349,9 @@ export function initVehicleDb(dbPath) {
 
   function fetchCandidates(input, limit = 5000, forEstimate = false, mileageDistanceMultiplier = 3) {
     const request = normalizeRequest(input);
-    const attempts = [
+    const attempts = request.exactYear && request.year ? [
+      { yearWindow: 0, useFuel: true, useKw: true, useTransmission: true, useDrive: true, useDetail: true },
+    ] : [
       { yearWindow: 1, useFuel: true, useKw: true, useTransmission: true, useDrive: true, useDetail: true },
       { yearWindow: 2, useFuel: true, useKw: true, useTransmission: true, useDrive: true, useDetail: true },
     ];

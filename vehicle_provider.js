@@ -5,7 +5,8 @@ import dotenv from 'dotenv';
 const VIN = /^[A-HJ-NPR-Z0-9]{17}$/;
 const DOV_FIELDS = ['DatumPrvniRegistrace', 'DatumPrvniRegistraceVCr', 'TovarniZnacka',
   'ObchodniOznaceni', 'MotorTyp', 'MotorMaxVykon', 'Palivo', 'VozidloDruh2',
-  'VozidloVyrobce', 'MotorZdvihObjem', 'Barva', 'VozidloKategorie', 'Typ', 'Varianta', 'Verze'];
+  'VozidloVyrobce', 'MotorZdvihObjem', 'Barva', 'VozidloKategorie', 'Typ', 'Varianta', 'Verze',
+  'PocetVlastniku'];
 const VIN_FIELDS = ['VIN', 'Make', 'Model', 'Model Year', 'Year', 'Engine Power (kW)',
   'Engine (full)', 'Engine Model', 'Fuel Type - Primary', 'Transmission', 'Drive', 'Body',
   'Engine Displacement (ccm)', 'Number of Doors', 'Number of Seats'];
@@ -86,7 +87,10 @@ export function createVehicleProvider({ databasePath = ':memory:', env = process
   async function lookup(provider, rawVin) {
     const vin = String(rawVin ?? '').trim().toUpperCase();
     if (!['dov', 'vindecoder'].includes(provider) || !VIN.test(vin)) throw new ProviderError(400, 'invalid_vehicle_request');
-    const cached = db.prepare('SELECT payload FROM provider_cache WHERE provider=? AND vin=? AND expires>?').get(provider, vin, now());
+    // Older cached DOV responses were filtered before PocetVlastniku was
+    // exposed. Refresh those once, while retaining the existing usage limits.
+    const cacheProvider = provider === 'dov' ? 'dov-owner-count-v1' : provider;
+    const cached = db.prepare('SELECT payload FROM provider_cache WHERE provider=? AND vin=? AND expires>?').get(cacheProvider, vin, now());
     if (cached) return JSON.parse(cached.payload);
     const key = `${provider}:${vin}`;
     if (pending.has(key)) return pending.get(key);
@@ -94,7 +98,7 @@ export function createVehicleProvider({ databasePath = ':memory:', env = process
     const promise = request(provider, vin).then(payload => {
       db.prepare('DELETE FROM provider_cache WHERE expires<=?').run(now());
       const ttl = payload.Status === 0 || payload.decode?.length === 0 ? 3600000 : 7 * 86400000;
-      db.prepare('INSERT OR REPLACE INTO provider_cache VALUES (?, ?, ?, ?)').run(provider, vin, JSON.stringify(payload), now() + ttl);
+      db.prepare('INSERT OR REPLACE INTO provider_cache VALUES (?, ?, ?, ?)').run(cacheProvider, vin, JSON.stringify(payload), now() + ttl);
       return payload;
     }).finally(() => pending.delete(key));
     pending.set(key, promise);

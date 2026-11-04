@@ -2,6 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createVehicleProvider, registerVehicleProvider} from './vehicle_provider.js';
 import express from 'express';
+import Database from 'better-sqlite3';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 const vin='TMBJG7NE0J0123456';
 const env={DATAOVOZIDLECH_API_KEY:'private-dov-key',VINDECODER_API_KEY:'private-vin-key',VINDECODER_API_SECRET:'private-vin-secret'};
 function setup(t, options={}) { const p=createVehicleProvider({env,...options});t.after(()=>p.close());return p; }
@@ -11,6 +15,28 @@ test('DOV uses fixed provider, private headers, caches and filters response',asy
  const [a,b]=await Promise.all([p.lookup('dov',vin),p.lookup('dov',vin)]);
  assert.deepEqual(a,{Status:1,Data:{TovarniZnacka:'Skoda',MotorTyp:''}});assert.deepEqual(a,b);
  await p.lookup('dov',vin);assert.equal(calls,1);
+});
+
+test('DOV exposes the documented owner count and refreshes the older filtered cache once', async t => {
+ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'carprice-dov-owner-'));
+ const databasePath = path.join(directory, 'provider.db');
+ let calls = 0;
+ const p = createVehicleProvider({env, databasePath, fetchImpl: async () => {
+   calls++;
+   return Response.json({Status: 1, Data: {
+     TovarniZnacka: 'CITROËN', PocetVlastniku: 3,
+     Owner: 'must remain private', CisloOrv: 'must remain private',
+   }});
+ }});
+ t.after(() => { p.close(); fs.rmSync(directory, {recursive: true, force: true}); });
+ const seed = new Database(databasePath);
+ seed.prepare('INSERT INTO provider_cache VALUES (?, ?, ?, ?)').run(
+   'dov', vin, JSON.stringify({Status: 1, Data: {TovarniZnacka: 'CITROËN'}}), Date.now() + 86400000);
+ seed.close();
+ const result = await p.lookup('dov', vin);
+ assert.deepEqual(result, {Status: 1, Data: {TovarniZnacka: 'CITROËN', PocetVlastniku: '3'}});
+ assert.deepEqual(await p.lookup('dov', vin), result);
+ assert.equal(calls, 1);
 });
 test('VINDecoder checksum stays on server and only vehicle fields return',async t=>{
  const p=setup(t,{fetchImpl:async(url)=>{assert.match(url,/^https:\/\/api\.vindecoder\.eu\/3\.2\/private-vin-key\/[a-f0-9]{10}\/decode\//);return Response.json({secret:env.VINDECODER_API_SECRET,decode:[{label:'Make',value:'Skoda'},{label:'API_KEY',value:env.VINDECODER_API_KEY}]});}});
