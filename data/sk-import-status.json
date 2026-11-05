@@ -1,7 +1,7 @@
 {
   "market": "SK",
   "currency": "EUR",
-  "updated_at": "2026-11-04T16:34:31.796Z",
+  "updated_at": "2026-11-05T16:46:28.509Z",
   "complete": false,
   "blocked": true,
   "sources": [
@@ -72,19 +72,19 @@
       "sitemaps_remaining": 0,
       "discovered": 21823,
       "counts": {
-        "error": 34,
-        "gone": 74,
-        "pending": 19407,
-        "rejected": 2308
+        "error": 36,
+        "gone": 77,
+        "pending": 19311,
+        "rejected": 2399
       },
       "records": [
         {
           "vehicle_type": "motorcycle",
-          "count": 17110
+          "count": 17107
         }
       ],
       "last_error": "bazos_moto_sk: HTTP 429",
-      "retry_at": "2026-11-05T04:34:21.589Z",
+      "retry_at": "2026-11-06T04:46:16.412Z",
       "started_at": "2026-10-18T12:42:21.036Z",
       "completed_at": null
     },
@@ -96,10 +96,10 @@
       "discovered": 107539,
       "counts": {
         "done": 14332,
-        "error": 20,
-        "gone": 7,
-        "pending": 87083,
-        "rejected": 6097
+        "error": 22,
+        "gone": 9,
+        "pending": 86987,
+        "rejected": 6189
       },
       "records": [
         {
@@ -108,11 +108,11 @@
         },
         {
           "vehicle_type": "passenger",
-          "count": 80649
+          "count": 80648
         }
       ],
       "last_error": "bazos_sk: HTTP 429",
-      "retry_at": "2026-11-05T04:34:21.733Z",
+      "retry_at": "2026-11-06T04:46:18.494Z",
       "started_at": "2026-10-18T12:42:15.669Z",
       "completed_at": null
     }
