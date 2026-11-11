@@ -1,5 +1,6 @@
 import { ensureFirstSeenSchema, recordFirstSeenIndex } from "./listing_first_seen.js";
 const DEFAULT_TABLE = "vehicle_app";
+const MAX_BUCKET_SPLIT_DEPTH = 3;
 
 const SAUTO_URL_RE = /^https?:\/\/(?:www\.)?sauto\.cz\/(?:osobni|uzitkova|motorky|ctyrkolky)\/detail\/[^/]+\/[^/]+\/(\d+)(?:[/?#]|$)/i;
 const CATEGORY_SLUG_BY_ID = new Map([
@@ -42,6 +43,49 @@ export function hasSafeSautoCoverage(actual, expected) {
   if (expected <= 0) return actual === 0;
   const allowedGap = Math.max(10, Math.ceil(expected * 0.001));
   return actual >= expected - allowedGap;
+}
+
+export async function fetchSautoBucketWithRecovery(bucket, options, depth = 0) {
+  const { scan, searchTotal, log = console.log } = options;
+  const result = await scan(bucket);
+  if (hasSafeSautoCoverage(result.ids.size, result.liveTotal)) return result;
+
+  const { categoryId, priceFrom, priceTo } = bucket;
+  const range = `category ${categoryId}, price ${priceFrom}-${priceTo}`;
+  if (priceFrom >= priceTo || depth >= MAX_BUCKET_SPLIT_DEPTH) {
+    throw new Error(
+      `Incomplete Sauto active-index bucket for ${range}: `
+      + `${result.ids.size}/${result.liveTotal} unique IDs`,
+    );
+  }
+
+  const middle = Math.floor((priceFrom + priceTo) / 2);
+  const ids = new Set();
+  const prices = new Map();
+  let total = 0;
+  log(`active index splitting ${range}: ${result.ids.size}/${result.liveTotal} unique IDs`);
+  // Keep the child scans serial within the existing bucket worker.
+  for (const [from, to] of [[priceFrom, middle], [middle + 1, priceTo]]) {
+    const plannedTotal = await searchTotal(categoryId, from, to);
+    const child = await fetchSautoBucketWithRecovery(
+      { categoryId, priceFrom: from, priceTo: to, plannedTotal }, options, depth + 1,
+    );
+    for (const id of child.ids) ids.add(id);
+    for (const [key, price] of child.prices) prices.set(key, price);
+    total += child.liveTotal;
+  }
+
+  // Recheck the unique union against both totals. Per-child tolerance and
+  // listings that move between ranges must not hide an incomplete parent.
+  const liveTotal = Math.max(result.liveTotal, total);
+  if (!hasSafeSautoCoverage(ids.size, liveTotal)) {
+    throw new Error(
+      `Incomplete Sauto active-index bucket after splitting ${range}: `
+      + `${ids.size}/${liveTotal} unique IDs`,
+    );
+  }
+  log(`active index recovered ${range}: ${ids.size}/${liveTotal} unique IDs`);
+  return { ...bucket, liveTotal, ids, prices };
 }
 
 export function hasSautoLifecycleSchema(db, table = DEFAULT_TABLE) {

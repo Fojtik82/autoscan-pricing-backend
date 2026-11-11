@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import {
   buildSautoListingUrl,
   ensureSautoLifecycleSchema,
+  fetchSautoBucketWithRecovery,
   hasSafeSautoCoverage,
   hasSautoLifecycleSchema,
   parseSautoListingId,
@@ -16,6 +17,76 @@ test("Sauto coverage accepts tiny duplicate drift but rejects incomplete scans",
   assert.equal(hasSafeSautoCoverage(6666, 6677), false);
   assert.equal(hasSafeSautoCoverage(99_900, 100_000), true);
   assert.equal(hasSafeSautoCoverage(99_899, 100_000), false);
+});
+
+function bucketScan(bucket, firstId, count, prices = []) {
+  const ids = new Set(Array.from({ length: count }, (_, index) => firstId + index));
+  return { ...bucket, ids, prices: new Map(prices), liveTotal: bucket.plannedTotal };
+}
+
+test("a complete Sauto bucket does not require recovery scans", async () => {
+  const bucket = { categoryId: 838, priceFrom: 100, priceTo: 199, plannedTotal: 30 };
+  const scanned = bucketScan(bucket, 1, 30);
+  const result = await fetchSautoBucketWithRecovery(bucket, {
+    scan: async () => scanned,
+    searchTotal: async () => assert.fail("complete range must not be split"),
+  });
+  assert.equal(result, scanned);
+});
+
+test("an incomplete 7113/7126 Sauto bucket recovers through validated subranges", async () => {
+  const bucket = { categoryId: 838, priceFrom: 100000, priceTo: 199999, plannedTotal: 7126 };
+  const counted = [];
+  const scanned = [];
+  const logs = [];
+  const result = await fetchSautoBucketWithRecovery(bucket, {
+    searchTotal: async (categoryId, from, to) => {
+      counted.push([categoryId, from, to]);
+      return from === 100000 ? 3500 : 3626;
+    },
+    scan: async (range) => {
+      scanned.push([range.priceFrom, range.priceTo]);
+      if (range === bucket) return bucketScan(range, 9000, 7113, [["sauto:9000", 180000]]);
+      if (range.priceFrom === 100000) return bucketScan(range, 1, 3500, [["sauto:1", 120000]]);
+      return bucketScan(range, 3501, 3626, [["sauto:3501", 170000]]);
+    },
+    log: (message) => logs.push(message),
+  });
+
+  assert.deepEqual(counted, [[838, 100000, 149999], [838, 150000, 199999]]);
+  assert.deepEqual(scanned, [[100000, 199999], [100000, 149999], [150000, 199999]]);
+  assert.equal(result.ids.size, 7126);
+  assert.equal(result.ids.has(9000), false, "partial parent results cannot make a split pass");
+  assert.deepEqual([...result.prices], [["sauto:1", 120000], ["sauto:3501", 170000]]);
+  assert.match(logs[0], /splitting.*7113\/7126/);
+  assert.match(logs[1], /recovered.*7126\/7126/);
+});
+
+test("a split still rejects duplicated IDs across individually complete subranges", async () => {
+  const bucket = { categoryId: 838, priceFrom: 100, priceTo: 199, plannedTotal: 80 };
+  await assert.rejects(fetchSautoBucketWithRecovery(bucket, {
+    searchTotal: async () => 40,
+    scan: async (range) => range === bucket
+      ? bucketScan(range, 1, 66)
+      : bucketScan(range, range.priceFrom === 100 ? 1 : 27, 40),
+    log: () => {},
+  }), /Incomplete Sauto active-index bucket after splitting.*66\/80/);
+});
+
+test("a persistently incomplete Sauto range stops at the split depth limit", async () => {
+  const ranges = [];
+  await assert.rejects(fetchSautoBucketWithRecovery(
+    { categoryId: 838, priceFrom: 0, priceTo: 15, plannedTotal: 100 },
+    {
+      searchTotal: async () => 100,
+      scan: async (range) => {
+        ranges.push([range.priceFrom, range.priceTo]);
+        return bucketScan(range, 1, 0);
+      },
+      log: () => {},
+    },
+  ), /Incomplete Sauto active-index bucket.*price 0-1: 0\/100/);
+  assert.deepEqual(ranges, [[0, 15], [0, 7], [0, 3], [0, 1]]);
 });
 
 test("daily Sauto URLs and source names follow the vehicle category", () => {

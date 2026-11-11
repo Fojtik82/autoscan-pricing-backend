@@ -33,6 +33,7 @@ import {
 import {
   buildSautoListingUrl,
   ensureSautoLifecycleSchema,
+  fetchSautoBucketWithRecovery,
   hasSafeSautoCoverage,
   hasSautoLifecycleSchema,
   reconcileSautoLifecycle,
@@ -514,7 +515,7 @@ async function planReconcileBuckets(
   ];
 }
 
-async function fetchReconcileBucket(bucket) {
+async function scanReconcileBucket(bucket) {
   const ids = new Set();
   const prices = new Map();
   let liveTotal = bucket.plannedTotal;
@@ -548,7 +549,13 @@ async function fetchReconcileBucket(bucket) {
       }
       offset += RECONCILE_PAGE_LIMIT;
     }
-    if (hasSafeSautoCoverage(ids.size, liveTotal)) break;
+    if (hasSafeSautoCoverage(ids.size, liveTotal)) {
+      console.log(
+        `active index category=${SAUTO_CATEGORIES.get(bucket.categoryId)} `
+        + `price=${bucket.priceFrom}-${bucket.priceTo} unique=${ids.size}`,
+      );
+      break;
+    }
     console.log(
       `active index recheck category=${SAUTO_CATEGORIES.get(bucket.categoryId)} `
       + `price=${bucket.priceFrom}-${bucket.priceTo} pass=${pass} `
@@ -556,16 +563,6 @@ async function fetchReconcileBucket(bucket) {
     );
   }
 
-  if (!hasSafeSautoCoverage(ids.size, liveTotal)) {
-    throw new Error(
-      `Incomplete Sauto active-index bucket for category ${bucket.categoryId}: `
-      + `${ids.size}/${liveTotal} unique IDs`,
-    );
-  }
-  console.log(
-    `active index category=${SAUTO_CATEGORIES.get(bucket.categoryId)} `
-    + `price=${bucket.priceFrom}-${bucket.priceTo} unique=${ids.size}`,
-  );
   return { ...bucket, liveTotal, ids, prices };
 }
 
@@ -608,7 +605,7 @@ async function fetchLiveSautoIds() {
   const fetched = await mapConcurrent(
     buckets,
     RECONCILE_CONCURRENCY,
-    fetchReconcileBucket,
+    (bucket) => fetchSautoBucketWithRecovery(bucket, { scan: scanReconcileBucket, searchTotal }),
   );
   const ids = new Set();
   const prices = new Map();
