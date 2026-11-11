@@ -217,9 +217,15 @@ test("HTTP ingest endpoint rejects a wrong key and accepts the shared key", { ti
     assert.ok(!("mileage" in lookupAccepted.body.vehicle));
     const comps = await getJson(port, "/comps?brand=Skoda&model=Octavia&year=2020&limit=5");
     assert.equal(comps.status, 200);
-    assert.ok(Array.isArray(comps.body));
-    assert.equal(comps.body[0]?.price_czk, 400000);
-    assert.equal(comps.body[0]?.source, "caroffice-anonymized-asking");
+    assert.deepEqual(comps.body, [], "Private observations without a public URL are excluded");
+    const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    try {
+      const stored = db.prepare("SELECT price, source_db FROM vehicle_app WHERE vin = ?").get(record.vin);
+      assert.equal(Number(stored?.price), record.price);
+      assert.equal(stored?.source_db, record.source_db);
+    } finally {
+      db.close();
+    }
   } finally {
     if (child.exitCode === null) child.kill("SIGTERM");
     await Promise.race([

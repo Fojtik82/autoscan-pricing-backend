@@ -416,9 +416,9 @@ export function initVehicleDb(dbPath) {
     return { request, vehicles: bestRows, usedAttempt, table };
   }
 
-  function estimatePrice(input) {
+  function estimateFromListings(input, { includeInactive = false } = {}) {
     let queryInput = input;
-    let { request, vehicles, usedAttempt } = fetchCandidates(queryInput, 5000, true);
+    let { request, vehicles, usedAttempt } = fetchCandidates(queryInput, 5000, true, 3, includeInactive);
     // A missing user-supplied powertrain remains a blocker unless the initial
     // set provides unambiguous evidence.  Re-run with the inferred constraint
     // so all subsequent mileage fallbacks remain variant-safe.
@@ -428,32 +428,32 @@ export function initVehicleDb(dbPath) {
         // `normalizePowertrain` accepts user-facing fuel labels; pass the
         // canonical value there as well so the SQL constraint is applied.
         queryInput = { ...input, fuel: inferredPowertrain, powertrain: inferredPowertrain };
-        ({ request, vehicles, usedAttempt } = fetchCandidates(queryInput, 5000, true));
+        ({ request, vehicles, usedAttempt } = fetchCandidates(queryInput, 5000, true, 3, includeInactive));
         request.powertrainInferred = true;
       }
     }
-    let selected = vehicles.slice(0, Math.min(120, Math.max(vehicles.length, 0)));
-    let prices = selected.map((vehicle) => vehicle.price_czk).filter(Boolean);
-    let weighted = request.mileageKm ? selected.map(vehicle => ({
+    const selected = vehicles.slice(0, 120);
+    const prices = selected.map(vehicle => vehicle.price_czk).filter(Boolean);
+    const weighted = request.mileageKm ? selected.map(vehicle => ({
       value: vehicle.price_czk, weight: mileageWeight(vehicle.mileage, request.mileageKm),
     })) : null;
-    let effectiveCount = weighted ? effectiveComparables(weighted) : prices.length;
-    let insufficientMileageSupport = weighted && effectiveCount < MIN_EFFECTIVE_COMPARABLES;
-    let priceAt = quantile => weighted
+    const effectiveCount = weighted ? effectiveComparables(weighted) : prices.length;
+    const insufficientMileageSupport = weighted && effectiveCount < MIN_EFFECTIVE_COMPARABLES;
+    const priceAt = quantile => weighted
       ? weightedPercentile(weighted, quantile) : percentile(prices, quantile);
-    let sourceCounts = countMarketSources(selected);
-    let partialSpecs = request.comparisonPolicy ? summarizePartialSpecs(selected, request) : null;
+    const sourceCounts = countMarketSources(selected);
+    const partialSpecs = request.comparisonPolicy ? summarizePartialSpecs(selected, request) : null;
     const powertrains = new Set(selected.map(vehicle => vehicle.powertrain).filter(Boolean));
     const unconfirmed = request.fuelNorm === 'hybrid' ||
       request.fuelSpecified && !request.fuelNorm ||
       !request.fuelNorm && selected.length > 0 && (powertrains.size !== 1 || selected.some(vehicle => !vehicle.powertrain || vehicle.powertrain === 'hybrid'));
-    let historicalFallback = false;
 
     // High-mileage cars are rare. When the normal local neighbourhood has too
     // little evidence, extend it while preserving every variant constraint,
     // then normalize observed prices to the requested mileage from the
     // observed median mileage slope. This is deliberately low confidence.
-    if (!request.invalidMileage && request.mileageKm && (prices.length < 3 || insufficientMileageSupport) && !unconfirmed) {
+    if (!includeInactive && !request.invalidMileage && request.mileageKm &&
+        (prices.length < 3 || insufficientMileageSupport) && !unconfirmed) {
       const extended = fetchCandidates(queryInput, 5000, true, 6);
       const candidates = extended.vehicles.slice(0, 120)
         .filter(vehicle => vehicle.price_czk && vehicle.mileage > 0);
@@ -469,8 +469,6 @@ export function initVehicleDb(dbPath) {
       const extrapolatedEffectiveCount = effectiveComparables(adjusted);
       if (candidates.length >= 4 && maximumMileage - minimumMileage >= 100000 &&
           outsideRange <= 180000 && extrapolatedEffectiveCount >= MIN_EFFECTIVE_COMPARABLES) {
-        vehicles = extended.vehicles;
-        usedAttempt = extended.usedAttempt;
         const sourceCounts = countMarketSources(candidates);
         const extendedPartialSpecs = request.comparisonPolicy
           ? summarizePartialSpecs(candidates, request) : null;
@@ -483,7 +481,8 @@ export function initVehicleDb(dbPath) {
             engine_applied: Boolean(request.motor), trim: request.modelDetail || null,
             trim_applied: Boolean(request.detailNorm), power_applied: Boolean(request.kw),
             transmission_applied: Boolean(request.transmissionNorm), drive_applied: Boolean(request.driveNorm),
-            year_window: usedAttempt.yearWindow, minimum_comparables: 3,
+            year_window: extended.usedAttempt.yearWindow, minimum_comparables: 3,
+            historical_fallback: false,
             mileage_applied: true, mileage_km: request.mileageKm,
             mileage_extrapolated: true, mileage_extrapolation_slope_czk_per_km: slope,
             mileage_bandwidth_km: extrapolationBandwidth(request.mileageKm),
@@ -501,43 +500,13 @@ export function initVehicleDb(dbPath) {
           price_czk: roundPrice(weightedPercentile(adjusted, 0.5)),
           low_czk: roundPrice(weightedPercentile(adjusted, 0.15)),
           high_czk: roundPrice(weightedPercentile(adjusted, 0.85)),
-          source: "backend_db", table, used_filters: usedAttempt,
+          source: "backend_db", table, used_filters: extended.usedAttempt,
           request: { brand: request.brand, model: request.model, year: request.year,
             mileage_km: request.mileageKm, fuel: request.fuelNorm },
         };
       }
     }
 
-    // Active listings remain the source of truth.  Only if they do not
-    // provide a usable quote do we widen to the retained historical rows,
-    // while preserving every requested variant and mileage constraint.
-    if (!request.invalidMileage && !unconfirmed && supportsActiveFlag &&
-        (prices.length < 3 || insufficientMileageSupport)) {
-      const historical = fetchCandidates(queryInput, 5000, true, 3, true);
-      const historicalSelected = historical.vehicles.slice(0, 120);
-      const historicalPrices = historicalSelected.map(vehicle => vehicle.price_czk).filter(Boolean);
-      const historicalWeighted = request.mileageKm ? historicalSelected.map(vehicle => ({
-        value: vehicle.price_czk, weight: mileageWeight(vehicle.mileage, request.mileageKm),
-      })) : null;
-      const historicalEffectiveCount = historicalWeighted
-        ? effectiveComparables(historicalWeighted) : historicalPrices.length;
-      const historicalInsufficient = historicalWeighted &&
-        historicalEffectiveCount < MIN_EFFECTIVE_COMPARABLES;
-      if (historicalPrices.length >= 3 && !historicalInsufficient) {
-        vehicles = historical.vehicles;
-        usedAttempt = historical.usedAttempt;
-        selected = historicalSelected;
-        prices = historicalPrices;
-        weighted = historicalWeighted;
-        effectiveCount = historicalEffectiveCount;
-        insufficientMileageSupport = historicalInsufficient;
-        priceAt = quantile => weighted
-          ? weightedPercentile(weighted, quantile) : percentile(prices, quantile);
-        sourceCounts = countMarketSources(selected);
-        partialSpecs = request.comparisonPolicy ? summarizePartialSpecs(selected, request) : null;
-        historicalFallback = true;
-      }
-    }
     const matching = {
       schema_version: 1, powertrain: request.fuelNorm || null,
       powertrain_inferred: Boolean(request.powertrainInferred),
@@ -549,8 +518,7 @@ export function initVehicleDb(dbPath) {
       minimum_comparables: 3,
       mileage_applied: Boolean(request.mileageKm),
       mileage_km: request.mileageKm,
-      historical_fallback: historicalFallback,
-      ...(historicalFallback ? { confidence: 'historical' } : {}),
+      historical_fallback: false,
       price_method: weighted ? MILEAGE_PRICE_METHOD : 'median',
       ...(weighted ? {
         mileage_bandwidth_km: mileageBandwidth(request.mileageKm),
@@ -576,7 +544,7 @@ export function initVehicleDb(dbPath) {
         price_czk: null,
         low_czk: null,
         high_czk: null,
-        source: historicalFallback ? "backend_db_historical_fallback" : "backend_db",
+        source: "backend_db",
         table,
         used_filters: usedAttempt,
       };
@@ -591,7 +559,7 @@ export function initVehicleDb(dbPath) {
       price_czk: roundPrice(priceAt(0.5)),
       low_czk: roundPrice(priceAt(0.15)),
       high_czk: roundPrice(priceAt(0.85)),
-      source: historicalFallback ? "backend_db_historical_fallback" : "backend_db",
+      source: "backend_db",
       table,
       used_filters: usedAttempt,
       request: {
@@ -601,6 +569,31 @@ export function initVehicleDb(dbPath) {
         mileage_km: request.mileageKm,
         fuel: request.fuelNorm,
       },
+    };
+  }
+
+  function estimatePrice(input) {
+    const active = estimateFromListings(input);
+    if (!supportsActiveFlag ||
+        active.price_estimate_not_found_reason !== 'insufficient_comparable_vehicles') {
+      return active;
+    }
+
+    // Keep an inferred powertrain from the active sample as a constraint.
+    const { powertrain, powertrain_inferred: inferred } = active.matching;
+    const historicalInput = inferred ? { ...input, fuel: powertrain, powertrain } : input;
+    const historical = estimateFromListings(historicalInput, { includeInactive: true });
+    if (!historical.found) return active;
+
+    return {
+      ...historical,
+      matching: {
+        ...historical.matching,
+        powertrain_inferred: inferred || historical.matching.powertrain_inferred,
+        historical_fallback: true,
+        confidence: 'historical',
+      },
+      source: "backend_db_historical_fallback",
     };
   }
 

@@ -1,7 +1,4 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
 
 import { initSearchLogsDb, normalizeSearchLog } from "./search_logs.js";
@@ -50,45 +47,38 @@ test("normalizeSearchLog keeps vehicle search fields in safe shapes", () => {
 });
 
 test("search log db inserts, lists, and summarizes searches", () => {
-  const dir = mkdtempSync(join(tmpdir(), "carprice-search-log-"));
-  const dbPath = join(dir, "logs.db");
+  const logs = initSearchLogsDb(":memory:");
+  const inserted = logs.insert({
+    vin: "TMBAG7NE9E0117046",
+    brand: "Skoda",
+    model: "Octavia",
+    year: 2017,
+    mileageKm: 120000,
+    fuel: "Nafta",
+    drive: "Predni",
+    transmission: "Manual",
+    kw: 85,
+    estimatedPriceCzk: 210000,
+    resultCount: 12,
+    found: true,
+    priceSource: "backend",
+    platform: "android",
+    appVersion: "1.0.0",
+    buildNumber: "33",
+  });
 
-  try {
-    const logs = initSearchLogsDb(dbPath);
-    const inserted = logs.insert({
-      vin: "TMBAG7NE9E0117046",
-      brand: "Skoda",
-      model: "Octavia",
-      year: 2017,
-      mileageKm: 120000,
-      fuel: "Nafta",
-      drive: "Predni",
-      transmission: "Manual",
-      kw: 85,
-      estimatedPriceCzk: 210000,
-      resultCount: 12,
-      found: true,
-      priceSource: "backend",
-      platform: "android",
-      appVersion: "1.0.0",
-      buildNumber: "33",
-    });
+  assert.equal(typeof inserted.id, "number");
 
-    assert.equal(typeof inserted.id, "number");
+  const rows = logs.list();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].vin, "TMBAG7NE9E0117046");
+  assert.equal(rows[0].brand, "Skoda");
+  assert.equal(rows[0].model, "Octavia");
+  assert.equal(rows[0].estimated_price_czk, 210000);
 
-    const rows = logs.list();
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].vin, "TMBAG7NE9E0117046");
-    assert.equal(rows[0].brand, "Skoda");
-    assert.equal(rows[0].model, "Octavia");
-    assert.equal(rows[0].estimated_price_czk, 210000);
-
-    const summary = logs.summary({ days: 1 });
-    assert.equal(summary.total, 1);
-    assert.equal(summary.found_total, 1);
-    assert.equal(summary.top_models[0].brand, "Skoda");
-    assert.equal(summary.top_models[0].model, "Octavia");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const summary = logs.summary({ days: 1 });
+  assert.equal(summary.total, 1);
+  assert.equal(summary.found_total, 1);
+  assert.equal(summary.top_models[0].brand, "Skoda");
+  assert.equal(summary.top_models[0].model, "Octavia");
 });

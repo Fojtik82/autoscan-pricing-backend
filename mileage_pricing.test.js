@@ -164,6 +164,24 @@ test('historical rows are used only after active listings cannot price the car',
   assert.equal(result.source, 'backend_db_historical_fallback');
 });
 
+test('historical listings require a consistent powertrain when fuel is omitted', t => {
+  const wanted = { brand: 'Skoda', model: 'Octavia', year: 2020, mileage: 100000 };
+  const petrol = lowMileage.map(row => ({ ...row, is_active: 0 }));
+  const diesel = {
+    is_active: 0, fuel: 'Diesel', title: 'Octavia 2.0 TDI', motor: '2.0 TDI',
+  };
+
+  const mixed = fixture(t, [...petrol, diesel]).estimatePrice(wanted);
+  assert.equal(mixed.found, false);
+  assert.equal(mixed.matching.historical_fallback, false);
+
+  const consistent = fixture(t, petrol).estimatePrice(wanted);
+  assert.equal(consistent.found, true);
+  assert.equal(consistent.matching.historical_fallback, true);
+  assert.equal(consistent.matching.powertrain, 'benzin');
+  assert.equal(consistent.matching.powertrain_inferred, true);
+});
+
 test('one close offer plus distant offers cannot masquerade as three effective comparables', t => {
   const api = fixture(t, [lowMileage[0], { mileage: 174000 }, { mileage: 175000 }]);
   const result = api.estimatePrice({ ...input, mileage: 100000 });
@@ -290,7 +308,8 @@ test('insertion order cannot change a weighted median or its price interval', t 
 });
 
 test('mobile/web and legacy HTTP endpoints use the same mileage-sensitive prices', { timeout: 20000 }, async t => {
-  const api = fixture(t, [...lowMileage, ...highMileage]);
+  const archived = lowMileage.map(row => ({ ...row, year: 2018, is_active: 0 }));
+  const api = fixture(t, [...lowMileage, ...highMileage, ...archived]);
   const reservation = net.createServer();
   await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
   const port = reservation.address().port;
@@ -337,6 +356,20 @@ test('mobile/web and legacy HTTP endpoints use the same mileage-sensitive prices
       }
       assert.deepEqual(values, [210000, 170000], route);
     }
+
+    const response = await fetch(base + '/price/estimate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...input, year: 2018, exact_year: true, mileage: 100000 }),
+      signal: AbortSignal.timeout(3000),
+    });
+    assert.equal(response.status, 200);
+    const historical = await response.json();
+    assert.equal(historical.found, true);
+    assert.equal(historical.matching.historical_fallback, true);
+    assert.equal(historical.matching.year_window, 0);
+    assert.equal(historical.count, 3);
+    assert.equal(historical.price_czk, 210000);
   } finally {
     if (child.exitCode === null) {
       const exited = once(child, 'exit');
