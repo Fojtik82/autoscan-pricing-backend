@@ -215,7 +215,8 @@ function normalizeRequest(input = {}) {
   };
 }
 
-function buildWhere(request, attempt, supportsActiveFlag = false, supportsFreshness = false) {
+function buildWhere(request, attempt, supportsActiveFlag = false, supportsFreshness = false,
+  includeInactive = false) {
   const where = [
     "price IS NOT NULL",
     "TRIM(price) <> ''",
@@ -236,7 +237,7 @@ function buildWhere(request, attempt, supportsActiveFlag = false, supportsFreshn
       + " AND julianday(last_checked_at) BETWEEN julianday('now','-48 hours') AND julianday('now','+5 minutes')))"
     : "NOT " + niche);
 
-  if (supportsActiveFlag) {
+  if (supportsActiveFlag && !includeInactive) {
     where.push("COALESCE(CAST(is_active AS INTEGER), 1) <> 0");
   }
 
@@ -347,7 +348,8 @@ export function initVehicleDb(dbPath) {
   const supportsFreshness = ["is_active", "last_seen_at", "last_checked_at", "missing_checks"]
     .every((column) => columns.has(column));
 
-  function fetchCandidates(input, limit = 5000, forEstimate = false, mileageDistanceMultiplier = 3) {
+  function fetchCandidates(input, limit = 5000, forEstimate = false,
+    mileageDistanceMultiplier = 3, includeInactive = false) {
     const request = normalizeRequest(input);
     const attempts = request.exactYear && request.year ? [
       { yearWindow: 0, useFuel: true, useKw: true, useTransmission: true, useDrive: true, useDetail: true },
@@ -362,7 +364,9 @@ export function initVehicleDb(dbPath) {
     if (request.invalidMileage) return { request, vehicles: [], usedAttempt, table };
 
     for (const attempt of attempts) {
-      const { where, params } = buildWhere(request, attempt, supportsActiveFlag, supportsFreshness);
+      const { where, params } = buildWhere(
+        request, attempt, supportsActiveFlag, supportsFreshness, includeInactive,
+      );
       // Filter before LIMIT and before deciding whether to widen the year
       // window. Unknown mileage cannot crowd out usable price evidence.
       let mileageWhere = '';
@@ -428,21 +432,22 @@ export function initVehicleDb(dbPath) {
         request.powertrainInferred = true;
       }
     }
-    const selected = vehicles.slice(0, Math.min(120, Math.max(vehicles.length, 0)));
-    const prices = selected.map((vehicle) => vehicle.price_czk).filter(Boolean);
-    const weighted = request.mileageKm ? selected.map(vehicle => ({
+    let selected = vehicles.slice(0, Math.min(120, Math.max(vehicles.length, 0)));
+    let prices = selected.map((vehicle) => vehicle.price_czk).filter(Boolean);
+    let weighted = request.mileageKm ? selected.map(vehicle => ({
       value: vehicle.price_czk, weight: mileageWeight(vehicle.mileage, request.mileageKm),
     })) : null;
-    const effectiveCount = weighted ? effectiveComparables(weighted) : prices.length;
-    const insufficientMileageSupport = weighted && effectiveCount < MIN_EFFECTIVE_COMPARABLES;
-    const priceAt = quantile => weighted
+    let effectiveCount = weighted ? effectiveComparables(weighted) : prices.length;
+    let insufficientMileageSupport = weighted && effectiveCount < MIN_EFFECTIVE_COMPARABLES;
+    let priceAt = quantile => weighted
       ? weightedPercentile(weighted, quantile) : percentile(prices, quantile);
-    const sourceCounts = countMarketSources(selected);
-    const partialSpecs = request.comparisonPolicy ? summarizePartialSpecs(selected, request) : null;
+    let sourceCounts = countMarketSources(selected);
+    let partialSpecs = request.comparisonPolicy ? summarizePartialSpecs(selected, request) : null;
     const powertrains = new Set(selected.map(vehicle => vehicle.powertrain).filter(Boolean));
     const unconfirmed = request.fuelNorm === 'hybrid' ||
       request.fuelSpecified && !request.fuelNorm ||
       !request.fuelNorm && selected.length > 0 && (powertrains.size !== 1 || selected.some(vehicle => !vehicle.powertrain || vehicle.powertrain === 'hybrid'));
+    let historicalFallback = false;
 
     // High-mileage cars are rare. When the normal local neighbourhood has too
     // little evidence, extend it while preserving every variant constraint,
@@ -502,6 +507,37 @@ export function initVehicleDb(dbPath) {
         };
       }
     }
+
+    // Active listings remain the source of truth.  Only if they do not
+    // provide a usable quote do we widen to the retained historical rows,
+    // while preserving every requested variant and mileage constraint.
+    if (!request.invalidMileage && !unconfirmed && supportsActiveFlag &&
+        (prices.length < 3 || insufficientMileageSupport)) {
+      const historical = fetchCandidates(queryInput, 5000, true, 3, true);
+      const historicalSelected = historical.vehicles.slice(0, 120);
+      const historicalPrices = historicalSelected.map(vehicle => vehicle.price_czk).filter(Boolean);
+      const historicalWeighted = request.mileageKm ? historicalSelected.map(vehicle => ({
+        value: vehicle.price_czk, weight: mileageWeight(vehicle.mileage, request.mileageKm),
+      })) : null;
+      const historicalEffectiveCount = historicalWeighted
+        ? effectiveComparables(historicalWeighted) : historicalPrices.length;
+      const historicalInsufficient = historicalWeighted &&
+        historicalEffectiveCount < MIN_EFFECTIVE_COMPARABLES;
+      if (historicalPrices.length >= 3 && !historicalInsufficient) {
+        vehicles = historical.vehicles;
+        usedAttempt = historical.usedAttempt;
+        selected = historicalSelected;
+        prices = historicalPrices;
+        weighted = historicalWeighted;
+        effectiveCount = historicalEffectiveCount;
+        insufficientMileageSupport = historicalInsufficient;
+        priceAt = quantile => weighted
+          ? weightedPercentile(weighted, quantile) : percentile(prices, quantile);
+        sourceCounts = countMarketSources(selected);
+        partialSpecs = request.comparisonPolicy ? summarizePartialSpecs(selected, request) : null;
+        historicalFallback = true;
+      }
+    }
     const matching = {
       schema_version: 1, powertrain: request.fuelNorm || null,
       powertrain_inferred: Boolean(request.powertrainInferred),
@@ -513,6 +549,8 @@ export function initVehicleDb(dbPath) {
       minimum_comparables: 3,
       mileage_applied: Boolean(request.mileageKm),
       mileage_km: request.mileageKm,
+      historical_fallback: historicalFallback,
+      ...(historicalFallback ? { confidence: 'historical' } : {}),
       price_method: weighted ? MILEAGE_PRICE_METHOD : 'median',
       ...(weighted ? {
         mileage_bandwidth_km: mileageBandwidth(request.mileageKm),
@@ -538,7 +576,7 @@ export function initVehicleDb(dbPath) {
         price_czk: null,
         low_czk: null,
         high_czk: null,
-        source: "backend_db",
+        source: historicalFallback ? "backend_db_historical_fallback" : "backend_db",
         table,
         used_filters: usedAttempt,
       };
@@ -553,7 +591,7 @@ export function initVehicleDb(dbPath) {
       price_czk: roundPrice(priceAt(0.5)),
       low_czk: roundPrice(priceAt(0.15)),
       high_czk: roundPrice(priceAt(0.85)),
-      source: "backend_db",
+      source: historicalFallback ? "backend_db_historical_fallback" : "backend_db",
       table,
       used_filters: usedAttempt,
       request: {

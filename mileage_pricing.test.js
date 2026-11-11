@@ -149,6 +149,21 @@ test('unknown mileage does not satisfy minimum comparable support', t => {
   assert.equal(result.price_czk, null);
 });
 
+test('historical rows are used only after active listings cannot price the car', t => {
+  const api = fixture(t, [
+    { is_active: 0, mileage: 95000, price: 220000 },
+    { is_active: 0, mileage: 100000, price: 210000 },
+    { is_active: 0, mileage: 105000, price: 200000 },
+  ]);
+  const result = api.estimatePrice({ ...input, mileage: 100000 });
+  assert.equal(result.found, true);
+  assert.equal(result.count, 3);
+  assert.equal(result.price_czk, 210000);
+  assert.equal(result.matching.historical_fallback, true);
+  assert.equal(result.matching.confidence, 'historical');
+  assert.equal(result.source, 'backend_db_historical_fallback');
+});
+
 test('one close offer plus distant offers cannot masquerade as three effective comparables', t => {
   const api = fixture(t, [lowMileage[0], { mileage: 174000 }, { mileage: 175000 }]);
   const result = api.estimatePrice({ ...input, mileage: 100000 });
