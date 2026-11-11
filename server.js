@@ -20,6 +20,7 @@ import { ensureVehicleDatabase } from "./vehicle_db_archive.js";
 import { loadProviderEnvironment, createVehicleProvider, registerVehicleProvider } from "./vehicle_provider.js";
 
 const PORT = Number(process.env.PORT || 3000);
+const BIND_ADDRESS = String(process.env.BIND_ADDRESS || "").trim();
 const SQLITE_PATH = process.env.SQLITE_PATH || "./vin_cache.db";
 const NHTSA_TIMEOUT_MS = Number(process.env.NHTSA_TIMEOUT_MS || 8000);
 const VEHICLES_DB_PATH =
@@ -522,6 +523,6 @@ app.get("/vin/decode/:vin", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`AutoScan Pricing Backend listening on port ${PORT}`);
+app.listen(PORT, BIND_ADDRESS || undefined, () => {
+  console.log(`AutoScan Pricing Backend listening on ${BIND_ADDRESS || "all interfaces"} port ${PORT}`);
 });

@@ -298,21 +298,32 @@ test('mobile/web and legacy HTTP endpoints use the same mileage-sensitive prices
   const child = spawn(process.execPath, [fileURLToPath(new URL('./server.js', import.meta.url))], {
     cwd: api.fixtureDirectory,
     env: { ...process.env, PORT: String(port), VEHICLES_DB_PATH: api.fixturePath,
-      SQLITE_PATH: path.join(api.fixtureDirectory, 'cache.db'), VEHICLE_INGEST_API_KEY: '' },
-    windowsHide: true, stdio: 'ignore',
+      SQLITE_PATH: path.join(api.fixtureDirectory, 'cache.db'), VEHICLE_INGEST_API_KEY: '',
+      BIND_ADDRESS: '127.0.0.1' },
+    windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
   });
+  let childOutput = '';
+  child.stdout.on('data', chunk => { childOutput += chunk; });
+  child.stderr.on('data', chunk => { childOutput += chunk; });
   try {
     const base = 'http://127.0.0.1:' + port;
     let ready = false;
-    for (let attempt = 0; attempt < 50; attempt++) {
+    let lastHealthError = '';
+    for (let attempt = 0; attempt < 100; attempt++) {
       try {
-        const response = await fetch(base + '/healthz', { signal: AbortSignal.timeout(200) });
+        const response = await fetch(base + '/healthz', { signal: AbortSignal.timeout(500) });
         ready = response.ok && (await response.json()).vehicleDbReady;
         if (ready) break;
-      } catch { /* The isolated child has not started listening yet. */ }
+      } catch (error) {
+        lastHealthError = error instanceof Error
+          ? error.message + (error.cause ? ': ' + String(error.cause) : '')
+          : String(error);
+      }
       await new Promise(resolve => setTimeout(resolve, 50));
     }
-    assert.equal(ready, true, 'isolated backend started with the fixture database');
+    assert.equal(ready, true,
+      'isolated backend started with the fixture database\n' + childOutput +
+      '\nLast health error: ' + lastHealthError);
     for (const route of ['/price/estimate', '/estimate', '/api/estimate']) {
       const values = [];
       for (const mileage of [100000, 140000]) {
