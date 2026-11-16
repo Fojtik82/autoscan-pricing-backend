@@ -167,9 +167,36 @@ function scoreVehicle(vehicle, request) {
   return score;
 }
 
+function renaultScenicAlias(model) {
+  switch (compact(model)) {
+    case "scenic":
+    case "meganescenic":
+      return "Scenic";
+    case "grandscenic":
+    case "meganegrandscenic":
+    case "grandmeganescenic":
+      return "Grand Scenic";
+    default:
+      return "";
+  }
+}
+
+function renaultScenicListing(model, title) {
+  const variant = renaultScenicAlias(model);
+  if (variant === "Grand Scenic") return variant;
+  if (!variant && !["", "megane"].includes(fold(model))) return "";
+
+  // Some sources file a Scenic under Megane or omit Grand from the model field.
+  const heading = fold(title);
+  if (/\b(?:grand ?(?:megane ?)?scenic|scenic grand)\b/.test(heading)) return "Grand Scenic";
+  if (variant || /\b(?:megane ?)?scenic\b/.test(heading)) return "Scenic";
+  return "";
+}
+
 function normalizeModelInput(brand, model) {
   const brandNorm = fold(brand);
   const modelNorm = fold(model);
+  if (brandNorm === "renault") return renaultScenicAlias(model) || model;
   if (["mercedes benz", "mercedes"].includes(brandNorm)) {
     const match = modelNorm.match(/^(gle|glc|gls|cla|cls|gla|glb)\b/);
     if (match) return match[1].toUpperCase();
@@ -246,7 +273,11 @@ function buildWhere(request, attempt, supportsActiveFlag = false, supportsFreshn
     params.brandNorm = request.brandNorm;
   }
 
-  if (request.modelNorm) {
+  const scenicVariant = request.brandNorm === "renault" && renaultScenicAlias(request.model);
+  if (scenicVariant) {
+    where.push("carprice_scenic_model(COALESCE(NULLIF(TRIM(model_norm), ''), model), title) = @scenicVariant");
+    params.scenicVariant = scenicVariant;
+  } else if (request.modelNorm) {
     where.push(`(
       model_norm LIKE @modelLike
       OR replace(model_norm, ' ', '') LIKE @modelCompactLike
@@ -329,6 +360,7 @@ function consensusPowertrain(vehicles) {
 export function initVehicleDb(dbPath) {
   const resolvedPath = path.resolve(dbPath);
   const db = new Database(resolvedPath, { readonly: true, fileMustExist: true });
+  db.function('carprice_scenic_model', { deterministic: true }, renaultScenicListing);
   db.function('carprice_powertrain', { deterministic: true }, (fuel, motor, model, title) =>
     normalizePowertrain({ fuel, motor, model, title }));
   db.function('carprice_edition', { deterministic: true }, (requested, text) => Number(matchesEdition(requested, text)));

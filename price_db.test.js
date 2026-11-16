@@ -90,3 +90,45 @@ test('exact-year estimates never widen the year or borrow adjacent-year prices',
   assert.equal(absent.count, 0);
   assert.equal(absent.matching.year_window, 0);
 });
+
+test('Renault Megane Scenic and Scenic share comparables, separate from Grand Scenic', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'carprice-scenic-alias-'));
+  const file = path.join(directory, 'vehicles.db');
+  const db = new Database(file);
+  db.exec(`CREATE TABLE vehicle_app (
+    brand, model, year, mileage, fuel, motor, price, transmission, drive,
+    source_url, source_db, title, kw, brand_norm, model_norm, fuel_norm,
+    transmission_norm, drive_norm, motor_norm, trim_norm, is_active)`);
+  const insert = db.prepare(`INSERT INTO vehicle_app VALUES (
+    'Renault',?,'2009','210000','Nafta','1.5 dCi',?,'manual','Predni',?,
+    'sauto',?,'78','renault',?,'diesel','manual','fwd','1 5 dci','',1)`);
+  const listings = [
+    ['Scenic', 'scenic', 'Renault Scénic 1.5 dCi', 60000],
+    ['Megane Scenic', 'megane scenic', 'Renault Mégane Scénic 1.5 dCi', 65000],
+    ['Megane', 'megane', 'Renault Mégane Scénic 1.5 dCi', 70000],
+    ['GrandScenic', 'grandscenic', 'Renault GrandScénic 1.5 dCi', 90000],
+    ['Grand Scenic', 'grand scenic', 'Renault Grand Scénic 1.5 dCi', 95000],
+    ['Scenic', 'scenic', 'Renault Grand Scénic 1.5 dCi', 100000],
+    ['Megane', 'megane', 'Renault Mégane 1.5 dCi', 20000],
+  ];
+  listings.forEach(([model, modelNorm, title, price], index) => {
+    insert.run(model, String(price), `https://www.sauto.cz/detail/${index}`, title, modelNorm);
+  });
+  db.close();
+
+  const api = initVehicleDb(file);
+  t.after(() => { api.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  const base = { brand: 'Renault', year: 2009, fuel: 'nafta', exact_year: true };
+  for (const [model, prices] of [
+    ['Mégane Scénic', [60000, 65000, 70000]],
+    ['Scenic', [60000, 65000, 70000]],
+    ['Grand Scénic', [90000, 95000, 100000]],
+  ]) {
+    const input = { ...base, model };
+    const estimate = api.estimatePrice(input);
+    assert.equal(estimate.found, true, model);
+    assert.equal(estimate.count, prices.length, model);
+    assert.equal(estimate.price_czk, prices[1], model);
+    assert.deepEqual(api.findComps(input).map(row => row.price_czk).sort((a, b) => a - b), prices);
+  }
+});
