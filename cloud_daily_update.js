@@ -982,8 +982,8 @@ function commitAndPush(repoDir) {
   run("git", ["config", "user.name", GIT_AUTHOR_NAME], { cwd: repoDir });
   run("git", ["config", "user.email", GIT_AUTHOR_EMAIL], { cwd: repoDir });
 
-  const archiveRelativePath = "data/vehicles_ai.db.gz";
-  const status = run("git", ["status", "--porcelain", "--", archiveRelativePath], {
+  const archivePaths = ["data/vehicles_ai.db.gz*"];
+  const status = run("git", ["status", "--porcelain", "--", ...archivePaths], {
     cwd: repoDir,
   }).stdout.trim();
 
@@ -995,7 +995,7 @@ function commitAndPush(repoDir) {
     return { pushed: false, commit: null, reason: "dry_run" };
   }
 
-  run("git", ["add", archiveRelativePath], { cwd: repoDir });
+  run("git", ["add", "-A", "--", ...archivePaths], { cwd: repoDir });
   const message = `Cloud update vehicles_ai.db ${new Date().toISOString().slice(0, 16)}`;
   run("git", ["commit", "-m", message], { cwd: repoDir });
   const commit = run("git", ["rev-parse", "--short", "HEAD"], { cwd: repoDir }).stdout.trim();

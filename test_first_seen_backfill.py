@@ -1,9 +1,47 @@
 import sqlite3
 import unittest
-from first_seen_backfill import apply_observations, collect_snapshot, listing_key
+import gzip
+import hashlib
+import io
+import json
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+from urllib.error import HTTPError
+from first_seen_backfill import apply_observations, collect_snapshot, listing_key, download_snapshot, archive_commits
 
 
 class BackfillTests(unittest.TestCase):
+    def test_download_legacy_and_split_snapshot_with_integrity_check(self):
+        encoded = gzip.compress(b'database bytes')
+        chunks = [encoded[:10], encoded[10:]]
+        parts = [{'name': f'vehicles_ai.db.gz.part{i:03d}-{hashlib.sha256(data).hexdigest()}',
+                  'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+                 for i, data in enumerate(chunks)]
+        resources = {'vehicles_ai.db.gz.parts.json': json.dumps({'version': 1, 'parts': parts}).encode(),
+                     **{part['name']: data for part, data in zip(parts, chunks)}}
+        def urlopen(request, timeout):
+            name = request.full_url.rsplit('/', 1)[-1]
+            if name not in resources:
+                raise HTTPError(request.full_url, 404, 'not found', {}, None)
+            return io.BytesIO(resources[name])
+        with tempfile.TemporaryDirectory() as directory, patch('first_seen_backfill.urllib.request.urlopen', side_effect=urlopen), patch('first_seen_backfill.time.sleep'):
+            target = Path(directory) / 'db'
+            download_snapshot('owner/repo', 'sha', target)
+            self.assertEqual(target.read_bytes(), b'database bytes')
+            resources[parts[1]['name']] = b'bad'
+            with self.assertRaisesRegex(RuntimeError, 'Corrupt'):
+                download_snapshot('owner/repo', 'sha', target)
+            resources.clear()
+            resources['vehicles_ai.db.gz'] = encoded
+            download_snapshot('owner/repo', 'sha', target)
+            self.assertEqual(target.read_bytes(), b'database bytes')
+
+    def test_archive_history_combines_and_deduplicates_both_formats(self):
+        item = {'sha': 'one', 'commit': {'committer': {'date': '2026-11-01T00:00:00Z'}}}
+        with patch('first_seen_backfill.api_json', return_value=[item]):
+            self.assertEqual(archive_commits('owner/repo', 'main', '2026-01-01'), [item])
+
     def test_historical_duplicates_use_earliest_live_observation_and_ignore_missing_checks(self):
         db = sqlite3.connect(':memory:')
         self.addCleanup(db.close)

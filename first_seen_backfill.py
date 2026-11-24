@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from collections import deque
 import datetime as dt
 import gzip
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ import sqlite3
 import tempfile
 import time
 import urllib.request
+import urllib.error
 
 
 def listing_key(url):
@@ -88,27 +90,56 @@ def api_json(url):
 
 
 def archive_commits(repo, ref, since):
-    commits = []
-    for page in range(1, 101):
-        batch = api_json(f"https://api.github.com/repos/{repo}/commits?sha={ref}&path=data/vehicles_ai.db.gz&since={since}T00:00:00Z&per_page=100&page={page}")
-        commits.extend(batch)
-        if len(batch) < 100:
-            break
-    else:
-        raise RuntimeError("Incomplete archive history: pagination limit exceeded")
+    commits = {}
+    for archive in ("vehicles_ai.db.gz", "vehicles_ai.db.gz.parts.json"):
+        for page in range(1, 101):
+            batch = api_json(f"https://api.github.com/repos/{repo}/commits?sha={ref}&path=data/{archive}&since={since}T00:00:00Z&per_page=100&page={page}")
+            commits.update((commit["sha"], commit) for commit in batch)
+            if len(batch) < 100:
+                break
+        else:
+            raise RuntimeError("Incomplete archive history: pagination limit exceeded")
     if not commits:
         raise RuntimeError("No historical archives found")
-    return sorted(commits, key=lambda commit: commit["commit"]["committer"]["date"])
+    return sorted(commits.values(), key=lambda commit: commit["commit"]["committer"]["date"])
 
 
 def download_snapshot(repo, sha, target):
     # The public raw host never receives the API token.
-    url = f"https://raw.githubusercontent.com/{repo}/{sha}/data/vehicles_ai.db.gz"
+    base = f"https://raw.githubusercontent.com/{repo}/{sha}/data/"
     for attempt in range(4):
         try:
-            request = urllib.request.Request(url, headers={"User-Agent": "CarPrice-first-seen-repair"})
-            with urllib.request.urlopen(request, timeout=120) as response, gzip.GzipFile(fileobj=response) as source, target.open("wb") as output:
-                shutil.copyfileobj(source, output, 1024 * 1024)
+            def get(name):
+                request = urllib.request.Request(base + name, headers={"User-Agent": "CarPrice-first-seen-repair"})
+                return urllib.request.urlopen(request, timeout=120)
+            try:
+                with get("vehicles_ai.db.gz.parts.json") as response:
+                    manifest = json.load(response)
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
+                manifest = None
+            with tempfile.TemporaryFile() as compressed:
+                if manifest is None:
+                    with get("vehicles_ai.db.gz") as response:
+                        shutil.copyfileobj(response, compressed, 1024 * 1024)
+                else:
+                    parts = manifest.get("parts")
+                    if manifest.get("version") != 1 or not isinstance(parts, list) or not 0 < len(parts) <= 1000:
+                        raise RuntimeError("Invalid archive manifest")
+                    for index, part in enumerate(parts):
+                        digest = part.get("sha256", "")
+                        name = f"vehicles_ai.db.gz.part{index:03d}-{digest}"
+                        if not re.fullmatch(r"[a-f0-9]{64}", digest) or part.get("name") != name:
+                            raise RuntimeError("Invalid archive part name")
+                        with get(name) as response:
+                            data = response.read()
+                        if len(data) != part.get("size") or hashlib.sha256(data).hexdigest() != digest:
+                            raise RuntimeError("Corrupt archive part")
+                        compressed.write(data)
+                compressed.seek(0)
+                with gzip.GzipFile(fileobj=compressed) as source, target.open("wb") as output:
+                    shutil.copyfileobj(source, output, 1024 * 1024)
             return
         except Exception:
             if attempt == 3:
