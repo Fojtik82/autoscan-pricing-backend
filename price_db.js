@@ -256,8 +256,10 @@ function buildWhere(request, attempt, supportsActiveFlag = false, supportsFreshn
   const params = {};
   const niche = "(lower(coalesce(source_db,'')) LIKE '%sportovnivozy%'"
     + " OR lower(coalesce(source_db,'')) LIKE '%rajveteranu%'"
+    + " OR lower(coalesce(source_db,'')) LIKE '%motoinzerce%'"
     + " OR lower(coalesce(source_url,'')) LIKE '%sportovnivozy.cz/%'"
-    + " OR lower(coalesce(source_url,'')) LIKE '%rajveteranu.cz/%')";
+    + " OR lower(coalesce(source_url,'')) LIKE '%rajveteranu.cz/%'"
+    + " OR lower(coalesce(source_url,'')) LIKE '%motoinzerce.cz/%')";
   where.push(supportsFreshness
     ? "(NOT " + niche + " OR (is_active=1 AND missing_checks=0"
       + " AND last_seen_at=last_checked_at"

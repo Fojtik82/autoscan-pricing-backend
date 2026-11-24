@@ -71,7 +71,7 @@ test('all four sources participate when eligible, with exact uncertainty counts;
     assert.equal(f.api.estimatePrice({...input,comparison_policy:'unknown'}).count,strict.count);
     const result = f.api.estimatePrice(annotated);
     assert.equal(result.count,7); assert.equal(result.price_czk,60000);
-    assert.deepEqual(result.source_counts,{sauto:3,bazos:2,sportovnivozy:1,rajveteranu:1,other:0});
+    assert.deepEqual(result.source_counts,{sauto:3,bazos:2,sportovnivozy:1,rajveteranu:1,motoinzerce:0,other:0});
     assert.equal(result.comparison_policy,ANNOTATED_SPECS_POLICY);
     assert.equal(result.partial_specs.partial_count,3);
     assert.equal(result.partial_specs.drive_unknown,2);
@@ -97,4 +97,15 @@ test('partially specified ads cannot bypass minimum comparables, powertrain, eng
     assert.equal(f.api.estimatePrice({...annotated,motor:'2.0 TDI'}).count,0);
     assert.equal(f.api.estimatePrice({...annotated,kw:180}).count,0);
   } finally {f.close();}
+});
+
+test('MotoInzerce must be fresh and independently counted before pricing', () => {
+  const source = { source_db: 'motoinzerce_daily_cloud', source_url: 'https://www.motoinzerce.cz/motorky/skoda/123-fabia.html' };
+  const f = fixture([{...source, price:'60000'}, {...source, source_url:'https://www.motoinzerce.cz/motorky/skoda/124-fabia.html', last_seen_at:'2020-01-01', last_checked_at:'2020-01-01'},
+    {...source, source_url:'https://www.motoinzerce.cz/motorky/skoda/125-fabia.html', missing_checks:1}]);
+  try {
+    const result = f.api.findComps(annotated, 5000);
+    assert.equal(result.length, 1);
+    assert.match(result[0].url, /123-fabia/);
+  } finally { f.close(); }
 });

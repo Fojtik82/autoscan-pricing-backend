@@ -1,7 +1,7 @@
 import { parseSautoListingId } from "./sauto_lifecycle.js";
 import { parseBazosListing } from "./bazos_lifecycle.js";
 
-export const MARKET_SOURCES = ["sauto", "bazos", "sportovnivozy", "rajveteranu"];
+export const MARKET_SOURCES = ["sauto", "bazos", "sportovnivozy", "rajveteranu", "motoinzerce"];
 
 export function parseNicheListing(value) {
   try {
@@ -25,6 +25,12 @@ export function marketSourceId(url, sourceDb = "") {
   if (parseBazosListing(url)) return "bazos";
   const niche = parseNicheListing(url);
   if (niche) return niche.source;
+  try {
+    const parsed = new URL(String(url || ""));
+    if (["http:", "https:"].includes(parsed.protocol) && !parsed.username && !parsed.password &&
+        !parsed.port && parsed.hostname.toLowerCase().replace(/^www\./, "") === "motoinzerce.cz" &&
+        /^\/motorky\/[a-z0-9-]+\/[1-9][0-9]*-[a-z0-9-]+\.html$/i.test(parsed.pathname)) return "motoinzerce";
+  } catch { /* Fall through to source tag. */ }
   const name = String(sourceDb).toLowerCase();
   return MARKET_SOURCES.find((source) => name.includes(source)) || "other";
 }

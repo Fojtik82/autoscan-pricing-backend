@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { updateSaleabilityPilot } from "./saleability_pilot.js";
 import { updateNicheSources } from "./niche_sources.js";
+import { updateMotoInzerce } from "./motoinzerce_source.js";
 import {
   applyExistingPriceRefresh,
   bazosDetailPriceObservation,
@@ -1114,6 +1115,13 @@ async function main() {
     dryRun: DRY_RUN, missingChecks: MISSING_CHECKS_BEFORE_INACTIVE,
   });
   const nicheFailed = nicheSources.some((source) => !source.ok);
+  let motoInzerce;
+  try {
+    motoInzerce = await updateMotoInzerce(db, { dryRun: DRY_RUN });
+  } catch (error) {
+    motoInzerce = { source: 'motoinzerce', ok: false, error: String(error.message || error) };
+  }
+  console.log('MOTOINZERCE_SOURCE ' + JSON.stringify(motoInzerce));
   const pilotModelPath = path.join(repoDir, 'data', 'saleability-model.json');
   const saleabilityPilot = DRY_RUN ? { skipped: true, reason: 'dry_run' } : updateSaleabilityPilot(db,
     fs.existsSync(pilotModelPath) ? JSON.parse(fs.readFileSync(pilotModelPath, 'utf8')) : null, {
@@ -1135,7 +1143,7 @@ async function main() {
   const gitResult = commitAndPush(repoDir);
 
   const summary = {
-    ok: !nicheFailed && !priceRefreshFailed && !(bazosScrape.indexErrors?.length),
+    ok: !nicheFailed && motoInzerce.ok && !priceRefreshFailed && !(bazosScrape.indexErrors?.length),
     dry_run: DRY_RUN,
     started_at: startedAt,
     finished_at: new Date().toISOString(),
@@ -1156,6 +1164,7 @@ async function main() {
     bazos_active_index: bazosLiveIndex?.summary ?? null,
     bazos_lifecycle: bazosLifecycle,
     niche_sources: nicheSources,
+    motoinzerce: motoInzerce,
     price_refresh: priceRefresh,
     saleability_pilot: saleabilityPilot,
     pushed: gitResult.pushed,
@@ -1164,7 +1173,7 @@ async function main() {
   };
 
   console.log(JSON.stringify(summary, null, 2));
-  if (nicheFailed || priceRefreshFailed || bazosScrape.indexErrors?.length) process.exitCode = 1;
+  if (nicheFailed || !motoInzerce.ok || priceRefreshFailed || bazosScrape.indexErrors?.length) process.exitCode = 1;
 }
 
 main().catch((error) => {
