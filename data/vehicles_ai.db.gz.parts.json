@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "parts": [
+    {
+      "name": "vehicles_ai.db.gz.part000-c59ea655c9c5be66cecf96000515c6c1e7877a490651d06d1b1e182dc71c67d1",
+      "size": 83886080,
+      "sha256": "c59ea655c9c5be66cecf96000515c6c1e7877a490651d06d1b1e182dc71c67d1"
+    },
+    {
+      "name": "vehicles_ai.db.gz.part001-d5135ee8048920e46d2cca84fca882cf65f721a2978bc6a3604e96bd8276a77d",
+      "size": 29669774,
+      "sha256": "d5135ee8048920e46d2cca84fca882cf65f721a2978bc6a3604e96bd8276a77d"
+    }
+  ]
+}
