@@ -78,7 +78,11 @@ export async function collectMotoInzerce({ fetchImpl = fetch, maxPages = 150, ma
     if (parsed.origin !== ROOT || parsed.username || parsed.password || (!isRobots && !robotsAllows(robots, parsed.pathname + parsed.search))) throw new Error('URL blocked by robots or host policy');
     await delay(Math.max(0, nextTime - Date.now())); nextTime = Date.now() + paceMs;
     const response = await fetchImpl(parsed.href, { headers: { 'User-Agent': UA }, redirect: 'manual', signal: AbortSignal.timeout(30000) });
-    if (response.status !== 200) throw new Error('MotoInzerce HTTP ' + response.status);
+    if (response.status !== 200) {
+      const error = new Error('MotoInzerce HTTP ' + response.status);
+      error.status = response.status;
+      throw error;
+    }
     const html = await response.text();
     if (html.length > 4_000_000 || /<title>\s*(just a moment|access denied|captcha)/i.test(html)) throw new Error('Unexpected MotoInzerce response');
     return html;
@@ -97,8 +101,21 @@ export async function collectMotoInzerce({ fetchImpl = fetch, maxPages = 150, ma
   // Reserve capacity for price refreshes so old active rows are not starved.
   const ordered = selectMotoDetails([...entries.values()], known, maxDetails);
   const results = [];
-  for (const item of ordered) results.push(parseMotoDetail(await read(item.url), item));
-  return { source: 'motoinzerce', indexComplete: complete, indexed: entries.size, results, deactivationSafe: false, detailsComplete: ordered.length === entries.size };
+  let detailErrors = 0;
+  for (const item of ordered) {
+    try {
+      results.push(parseMotoDetail(await read(item.url), item));
+    } catch (error) {
+      // A vanished or malformed ad is not evidence that the whole index has
+      // disappeared. Rate limiting/access challenges must stop the crawl.
+      if (error.status === 403 || error.status === 429 || /blocked by robots|challenge/i.test(error.message)) throw error;
+      detailErrors += 1;
+      if (detailErrors > 10) throw new Error('MotoInzerce detail error budget exceeded');
+    }
+  }
+  if (ordered.length && !results.length) throw new Error('MotoInzerce no details could be verified');
+  return { source: 'motoinzerce', indexComplete: complete, indexed: entries.size, results, detailErrors,
+    deactivationSafe: false, detailsComplete: detailErrors === 0 && ordered.length === entries.size };
 }
 
 export function selectMotoDetails(all, known, maxDetails) {
@@ -124,7 +141,8 @@ export async function updateMotoInzerce(db, { dryRun = false, collect = collectM
   const parsed = batch.results.filter(item => item.status === 'parsed');
   const summary = { source: 'motoinzerce', ok: true, dry_run: dryRun, index_complete: batch.indexComplete,
     details_complete: batch.detailsComplete, deactivation_safe: false, indexed: batch.indexed,
-    checked: batch.results.length, parsed: parsed.length, inserted: 0, updated: 0, deactivated: 0 };
+    checked: batch.results.length, detail_errors: batch.detailErrors || 0,
+    parsed: parsed.length, inserted: 0, updated: 0, deactivated: 0 };
   if (dryRun || !batch.results.length) return summary;
   const now = new Date().toISOString();
   db.transaction(() => {

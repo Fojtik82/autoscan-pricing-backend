@@ -37,6 +37,9 @@ function number(value, min, max) {
   return Number.isFinite(n) && n >= min && n <= max ? n : null;
 }
 function isGone(html) {
+  // A listing may move into the archive between the index and detail fetch.
+  // Match the detail-table field, not the site's ubiquitous archive menu.
+  if (/<td\b[^>]*>\s*datum(?:\s|&nbsp;|&#160;)+archivace\s*:\s*<\/td>/i.test(html)) return true;
   const value = fold(text(html));
   return /tento (?:sportovni vuz|veteran|inzerat) (?:byl )?jiz prodan/.test(value)
     || value.includes("inzerat jiz neni aktualni")
@@ -206,7 +209,9 @@ export function parseNicheDetail(html, listing) {
   // Never-edited listings have only an insertion date on both sites.
   if (!fields.znacka || !fields.model
       || !(fields["datum aktualizace"] || fields["datum vlozeni"])) {
-    throw new Error(listing.source + ": unrecognized detail structure");
+    // Preserve the affected listing as unverified. The source-wide coverage
+    // guard in collect() still rejects a widespread markup change.
+    return { status: "unsupported" };
   }
   const year = number(fields["rok vyroby"], 1886, new Date().getUTCFullYear() + 1);
   if (year === null) return { status: "unsupported" };
@@ -244,6 +249,14 @@ export function parseNicheDetail(html, listing) {
       engine_ccm: engineCcm, engine_l: engineCcm === null ? null : String(engineCcm / 1000),
     },
   };
+}
+
+export function validateNicheDetailCoverage(source, results) {
+  const accepted = results.filter((item) => item.status === "parsed");
+  if (!accepted.length || results.filter((item) => item.status === "unsupported").length
+      > Math.max(3, Math.floor(results.length * 0.02))) {
+    throw new Error(source.id + ": unusable detail coverage");
+  }
 }
 
 async function collect(source) {
@@ -300,11 +313,7 @@ async function collect(source) {
   // Two paced workers per source; no proxies, login or challenge bypass.
   await Promise.all([worker(), worker()]);
   if (failure) throw failure;
-  const accepted = results.filter((item) => item.status === "parsed");
-  if (!accepted.length || results.filter((item) => item.status === "unsupported").length
-      > Math.max(3, Math.floor(results.length * 0.02))) {
-    throw new Error(source.id + ": unusable detail coverage");
-  }
+  validateNicheDetailCoverage(source, results);
   return { source, results, indexed: listings.size, pages: parsed.pages };
 }
 

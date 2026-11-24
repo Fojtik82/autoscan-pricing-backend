@@ -80,3 +80,26 @@ test('a changing index total does not discard verified sales', async () => {
   assert.equal(result.results[0].status, 'parsed');
   assert.equal(result.deactivationSafe, false);
 });
+
+test('a vanished detail does not discard other verified motorcycle ads', async () => {
+  const index = '<p id="vypis-info">Zobrazuji inzeráty: 1 - 2 z 2</p>' +
+    '<a href="/motorky/suzuki/123-rm-z-250.html">Suzuki<br />RM-Z 250</a>' +
+    '<a href="/motorky/suzuki/124-rm-z-250.html">Suzuki<br />RM-Z 250</a>';
+  const response = (status, body = '') => ({ status, text: async () => body });
+  const fetchImpl = async url => url.endsWith('/robots.txt') ? response(200, 'User-agent: *\nAllow: /') :
+    url.includes('/123-') ? response(200, detail) : url.includes('/124-') ? response(404) : response(200, index);
+  const result = await collectMotoInzerce({ fetchImpl, maxDetails: 2, paceMs: 1000 });
+  assert.equal(result.results.length, 1);
+  assert.equal(result.detailErrors, 1);
+  assert.equal(result.detailsComplete, false);
+  assert.equal(result.deactivationSafe, false);
+});
+
+test('rate-limited MotoInzerce stops immediately instead of continuing', async () => {
+  const response = (status, body = '') => ({ status, text: async () => body });
+  let details = 0;
+  const fetchImpl = async url => url.endsWith('/robots.txt') ? response(200, 'User-agent: *\nAllow: /') :
+    url.includes('.html') ? (details++, response(429)) : response(200, first);
+  await assert.rejects(collectMotoInzerce({ fetchImpl, maxDetails: 1, paceMs: 1000 }), /HTTP 429/);
+  assert.equal(details, 1);
+});

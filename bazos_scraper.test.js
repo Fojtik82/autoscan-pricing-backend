@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   bazosCategoryPageUrl,
   createBazosTaxonomy,
+  isBazosPublicWindowEnd,
   parseBazosDetail,
   parseBazosListingPage,
   parseBazosSitemapDetail,
@@ -11,6 +12,19 @@ import {
 } from "./bazos_scraper.js";
 
 const category = { host: "auto.bazos.cz", slug: "renault", group: "auto", brand: "Renault" };
+
+test("Bazos public page boundary only accepts confirmed 404 after prior quiet pages", () => {
+  const end = { error: new Error("404 Not Found: https://auto.bazos.cz/skoda/19980/"),
+    offset: 19980, previousOffset: 19960, previousTotal: 22000, previousCount: 20, quietPages: 2 };
+  assert.equal(isBazosPublicWindowEnd(end), true);
+  assert.equal(isBazosPublicWindowEnd({ ...end, offset: 100 }), false);
+  assert.equal(isBazosPublicWindowEnd({ ...end, previousOffset: 19940 }), false);
+  assert.equal(isBazosPublicWindowEnd({ ...end, previousCount: 0 }), false);
+  assert.equal(isBazosPublicWindowEnd({ ...end, quietPages: 1 }), false);
+  assert.equal(isBazosPublicWindowEnd({ ...end, previousTotal: 19980 }), false);
+  assert.equal(isBazosPublicWindowEnd({ ...end, error: new Error("429 Too Many Requests") }), false);
+  assert.equal(isBazosPublicWindowEnd({ ...end, error: new Error("500 Internal Server Error") }), false);
+});
 
 test("Bazos listing pages expose canonical IDs, dates and totals", () => {
   const html = `

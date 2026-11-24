@@ -2,6 +2,8 @@ import fs from "node:fs";
 import { updateSaleabilityPilot } from "./saleability_pilot.js";
 import { updateNicheSources } from "./niche_sources.js";
 import { updateMotoInzerce } from "./motoinzerce_source.js";
+import { pushArchiveWithRetry } from "./archive_publish.js";
+import { collectIsolatedMarketSource } from "./market_source_isolation.js";
 import {
   applyExistingPriceRefresh,
   bazosDetailPriceObservation,
@@ -25,6 +27,7 @@ import {
   BAZOS_DAILY_CATEGORIES,
   bazosCategoryPageUrl,
   createBazosTaxonomy,
+  isBazosPublicWindowEnd,
   parseBazosDetail,
   parseBazosListingPage,
   parseBazosSitemapDetail,
@@ -732,6 +735,9 @@ async function fetchBazosDailyCategory(category, cutoffDate) {
   let quietPages = 0;
   let pages = 0;
   let reachedSafetyLimit = false;
+  let previousOffset = null;
+  let previousTotal = null;
+  let previousCount = null;
 
   for (let offset = 0; total === null || offset < total; offset += 20) {
     if (pages >= BAZOS_MAX_DAILY_PAGES_PER_CATEGORY) {
@@ -742,6 +748,12 @@ async function fetchBazosDailyCategory(category, cutoffDate) {
     let html;
     try { html = await fetchText(url); }
     catch (error) {
+      if (isBazosPublicWindowEnd({ error, offset, previousOffset, previousTotal, previousCount, quietPages })) {
+        indexWarnings.push(category.host + "/" + category.slug
+          + ": public pagination ended at " + offset + "/" + previousTotal
+          + "; remaining known ads require detail price refresh");
+        break;
+      }
       // Keep verified earlier pages, but still report this real request failure.
       error.partial = { recent: found, priceObservations, indexWarnings };
       throw error;
@@ -762,6 +774,9 @@ async function fetchBazosDailyCategory(category, cutoffDate) {
     );
     found.push(...recent);
     pages += 1;
+    previousOffset = offset;
+    previousTotal = total;
+    previousCount = parsed.listings.length;
     quietPages = recent.length ? 0 : quietPages + 1;
     if (!parsed.listings.length || offset + 20 >= total) break;
     if (DAILY_PRICE_REFRESH_ENABLED && bazosPaginationWindowEnded(html, category, offset, total)) {
@@ -998,22 +1013,24 @@ function commitAndPush(repoDir) {
     return { pushed: false, commit: null, reason: "dry_run" };
   }
 
+  const originalBase = run("git", ["rev-parse", "HEAD"], { cwd: repoDir }).stdout.trim();
   run("git", ["add", "-A", "--", ...archivePaths], { cwd: repoDir });
   const message = `Cloud update vehicles_ai.db ${new Date().toISOString().slice(0, 16)}`;
   run("git", ["commit", "-m", message], { cwd: repoDir });
-  const commit = run("git", ["rev-parse", "--short", "HEAD"], { cwd: repoDir }).stdout.trim();
-  run("git", ["push", "origin", `HEAD:${GITHUB_BRANCH}`], { cwd: repoDir });
-
-  return { pushed: true, commit, reason: "pushed" };
+  return pushArchiveWithRetry(repoDir, GITHUB_BRANCH, originalBase, run);
 }
 
-async function refreshDailyExistingPrices(db, liveIndex, bazosLiveIndex, bazosScrape) {
+async function refreshDailyExistingPrices(db, liveIndex, bazosLiveIndex, bazosScrape, sourceFailures = []) {
   if (!DAILY_PRICE_REFRESH_ENABLED) {
     return [{ ok: true, skipped: true, complete: false, reason: "daily_price_refresh_disabled" }];
   }
   const summaries = [];
   for (const source of ["sauto", "bazos"]) {
     if (source === "sauto" ? !SAUTO_ENABLED : !BAZOS_ENABLED) continue;
+    if (sourceFailures.some((failure) => failure.source === source)) {
+      summaries.push({ source, ok: false, skipped: true, complete: false, reason: "source_collection_failed" });
+      continue;
+    }
     const live = source === "sauto" ? liveIndex?.ids : bazosLiveIndex?.keys;
     if (!live) {
       summaries.push({ source, ok: false, complete: false, reason: "complete_active_index_required" });
@@ -1065,16 +1082,23 @@ async function main() {
 
   const beforeCount = db.prepare(`SELECT COUNT(*) AS count FROM ${TABLE}`).get().count;
   const existingUrls = SAUTO_ENABLED ? loadExistingUrls(db) : new Set();
-  const sautoRows = SAUTO_ENABLED ? await scrapeNewRows(existingUrls) : [];
-  const liveIndex = SAUTO_ENABLED && RECONCILE_ENABLED ? await fetchLiveSautoIds() : null;
   const existingBazosKeys = BAZOS_ENABLED ? loadExistingBazosKeys(db) : new Set();
-  const bazosScrape = BAZOS_ENABLED
-    ? await scrapeNewBazosRows(db, existingBazosKeys)
-    : { rows: [], candidates: 0, rejected: 0, detailsSkipped: false,
-      priceObservations: new Map(), indexErrors: [] };
-  const bazosLiveIndex = BAZOS_ENABLED && BAZOS_RECONCILE_ENABLED
-    ? await fetchLiveBazosKeys()
-    : null;
+  const sautoSource = await collectIsolatedMarketSource({ source: "sauto", enabled: SAUTO_ENABLED,
+    scrape: () => scrapeNewRows(existingUrls), validateScrape: Array.isArray, indexEnabled: RECONCILE_ENABLED,
+    index: fetchLiveSautoIds, validateIndex: value => value?.ids instanceof Set && value?.prices instanceof Map });
+  const bazosSource = await collectIsolatedMarketSource({ source: "bazos", enabled: BAZOS_ENABLED,
+    scrape: () => scrapeNewBazosRows(db, existingBazosKeys),
+    validateScrape: value => Array.isArray(value?.rows) && value?.priceObservations instanceof Map && Array.isArray(value?.indexErrors),
+    indexEnabled: BAZOS_RECONCILE_ENABLED,
+    index: fetchLiveBazosKeys, validateIndex: value => value?.keys instanceof Set });
+  const sourceFailures = [sautoSource.failure, bazosSource.failure].filter(Boolean)
+    .map(failure => ({ ...failure, message: maskToken(failure.message) }));
+  for (const failure of sourceFailures) console.error("MARKET_SOURCE_FAILURE " + JSON.stringify(failure));
+  const sautoRows = sautoSource.scraped || [];
+  const liveIndex = sautoSource.liveIndex;
+  const bazosScrape = bazosSource.scraped || { rows: [], candidates: 0, rejected: 0,
+    detailsSkipped: false, priceObservations: new Map(), indexErrors: [] };
+  const bazosLiveIndex = bazosSource.liveIndex;
   const rows = [...sautoRows, ...bazosScrape.rows];
   const insertedRows = DRY_RUN ? 0 : insertRows(db, rows);
   let lifecycle = null;
@@ -1109,7 +1133,7 @@ async function main() {
       });
     }
   }
-  const priceRefresh = await refreshDailyExistingPrices(db, liveIndex, bazosLiveIndex, bazosScrape);
+  const priceRefresh = await refreshDailyExistingPrices(db, liveIndex, bazosLiveIndex, bazosScrape, sourceFailures);
   const priceRefreshFailed = priceRefresh.some((source) => !source.ok);
   const nicheSources = await updateNicheSources(db, {
     dryRun: DRY_RUN, missingChecks: MISSING_CHECKS_BEFORE_INACTIVE,
@@ -1143,7 +1167,7 @@ async function main() {
   const gitResult = commitAndPush(repoDir);
 
   const summary = {
-    ok: !nicheFailed && motoInzerce.ok && !priceRefreshFailed && !(bazosScrape.indexErrors?.length),
+    ok: !sourceFailures.length && !nicheFailed && motoInzerce.ok && !priceRefreshFailed && !(bazosScrape.indexErrors?.length),
     dry_run: DRY_RUN,
     started_at: startedAt,
     finished_at: new Date().toISOString(),
@@ -1162,6 +1186,7 @@ async function main() {
     active_index: liveIndex?.summary ?? null,
     lifecycle,
     bazos_active_index: bazosLiveIndex?.summary ?? null,
+    source_failures: sourceFailures,
     bazos_lifecycle: bazosLifecycle,
     niche_sources: nicheSources,
     motoinzerce: motoInzerce,
@@ -1173,7 +1198,7 @@ async function main() {
   };
 
   console.log(JSON.stringify(summary, null, 2));
-  if (nicheFailed || !motoInzerce.ok || priceRefreshFailed || bazosScrape.indexErrors?.length) process.exitCode = 1;
+  if (sourceFailures.length || nicheFailed || !motoInzerce.ok || priceRefreshFailed || bazosScrape.indexErrors?.length) process.exitCode = 1;
 }
 
 main().catch((error) => {

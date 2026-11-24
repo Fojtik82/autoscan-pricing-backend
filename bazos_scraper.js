@@ -37,6 +37,19 @@ export const BAZOS_DAILY_CATEGORIES = [
   ...MOTORCYCLE_CATEGORIES,
 ];
 
+// Bazos can advertise more listings than its publicly reachable 20k window.
+// Only the observed 19,980 boundary, immediately after a verified 19,960
+// page and with older-than-cutoff pages already seen, is a pagination limit.
+// Any other HTTP 404 remains an error; callers must keep the index incomplete
+// and refresh prices for remaining known ads via their detail URLs.
+export function isBazosPublicWindowEnd({ error, offset, previousOffset, previousTotal, previousCount, quietPages }) {
+  return /^404(?:\s|$)/.test(String(error?.message || error || "")) &&
+    offset === 19980 && previousOffset === 19960 &&
+    Number.isFinite(previousTotal) && previousTotal > offset &&
+    Number.isInteger(previousCount) && previousCount > 0 &&
+    Number.isInteger(quietPages) && quietPages >= 2;
+}
+
 export function normalizeBazosText(value) {
   return String(value ?? "")
     .normalize("NFD")
