@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import { registerSaleabilityApi } from "./saleability_api.js";
+import { registerListingSaleDurationApi } from "./listing_sale_duration_api.js";
+import { ensureListingSaleDurationIndexes } from "./listing_sale_duration_schema.js";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -52,6 +54,13 @@ let vehicleIngestDb = null;
 
 try {
   await ensureVehicleDatabase(VEHICLES_DB_PATH);
+  let durationIndexDb;
+  try {
+    durationIndexDb = new Database(VEHICLES_DB_PATH, { fileMustExist: true });
+    ensureListingSaleDurationIndexes(durationIndexDb);
+  } catch (error) {
+    console.error("Listing duration index preparation failed:", error.message);
+  } finally { durationIndexDb?.close(); }
   vehicleDb = initVehicleDb(VEHICLES_DB_PATH);
   if (VEHICLE_INGEST_API_KEY) vehicleIngestDb = initVehicleIngestDb(VEHICLES_DB_PATH);
   console.log("Vehicle price DB loaded", vehicleDb.health());
@@ -358,6 +367,7 @@ app.get("/price/health", (_req, res) => {
 });
 
 registerSaleabilityApi(app, VEHICLES_DB_PATH);
+registerListingSaleDurationApi(app, VEHICLES_DB_PATH);
 
 app.post("/price/estimate", (req, res) => {
   if (!vehicleDbRequired(res)) return;

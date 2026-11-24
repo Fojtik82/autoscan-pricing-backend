@@ -343,6 +343,13 @@ export function parseBazosDetail(html, candidate, taxonomy, scrapedAt = new Date
   if (kw) motorParts.push(`${kw} kW`);
   if (fuel) motorParts.push(fuel);
   const motor = motorParts.join(" / ") || null;
+  // Keep the displayed posting date when the daily listing page supplies it.
+  // Historical rows without one continue to use their first live observation.
+  const posted = /^\d{4}-\d{2}-\d{2}$/.test(candidate.postedDate || "")
+    ? new Date(`${candidate.postedDate}T00:00:00.000Z`) : null;
+  const publishedAt = posted && Number.isFinite(posted.getTime())
+    && posted.toISOString().slice(0, 10) === candidate.postedDate
+    && posted.getTime() <= Date.parse(scrapedAt) ? posted.toISOString() : null;
 
   return {
     brand,
@@ -370,6 +377,7 @@ export function parseBazosDetail(html, candidate, taxonomy, scrapedAt = new Date
     engine_l: engineCcm ? (Math.round((engineCcm / 1000) * 10) / 10).toFixed(1) : null,
     trim_norm: null,
     is_active: 1,
+    published_at: publishedAt,
     last_seen_at: scrapedAt,
     last_checked_at: null,
     missing_since: null,

@@ -1,6 +1,9 @@
+import { ensureListingSaleDurationIndexes } from './listing_sale_duration_schema.js';
+
 // First observation is not a publication date. Only a transition from absence
 // in a previous complete index can bound the start of an observation period.
 const FIELDS = [
+  ['published_at', 'TEXT'],
   ['first_seen_at', 'TEXT'],
   ['first_seen_after_at', 'TEXT'],
   ['first_seen_is_observed', 'INTEGER NOT NULL DEFAULT 0'],
@@ -30,6 +33,7 @@ export function ensureFirstSeenSchema(db, table = 'vehicle_app') {
       first_seen_evidence = 'legacy_last_seen', first_seen_is_observed = 0
       WHERE last_seen_at IS NOT NULL`);
   }
+  ensureListingSaleDurationIndexes(db, table);
 }
 
 export function recordFirstSeenIndex(db, { source, liveKeys, rows, keyForUrl, now, table = 'vehicle_app' }) {

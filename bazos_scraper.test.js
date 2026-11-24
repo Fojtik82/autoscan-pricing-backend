@@ -44,6 +44,7 @@ test("Bazos detail parser maps a useful vehicle row", () => {
     key: "auto.bazos.cz:223315917",
     url: "https://auto.bazos.cz/inzerat/223315917/renault-megane.php",
     title: "Renault Megane II combi 1.6 16V",
+    postedDate: "2026-09-01",
     category,
   };
   const html = `
@@ -61,6 +62,11 @@ test("Bazos detail parser maps a useful vehicle row", () => {
   assert.equal(row.vin, "VF1BM0J0H28178622");
   assert.equal(row.body, "Kombi");
   assert.equal(row.source_db, "bazos_auto_daily_cloud");
+  assert.equal(row.published_at, "2026-09-01T00:00:00.000Z");
+  for (const postedDate of [undefined, "2026-02-31", "2026-09-03", "invalid"]) {
+    assert.equal(parseBazosDetail(html, { ...candidate, postedDate }, taxonomy,
+      "2026-09-02T10:00:00.000Z").published_at, null);
+  }
 });
 
 test("Bazos detail parser rejects parts and does not take a brand from description", () => {
