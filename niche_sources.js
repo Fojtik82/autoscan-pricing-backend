@@ -99,6 +99,35 @@ function robotsPolicy(body) {
   };
 }
 
+export class NicheTransientError extends Error {}
+
+// Retry only transient server/network failures. Never retry access denials or
+// rate limits, and keep the normal per-host pacing for every attempt.
+export async function fetchNicheWithRetry(url, source, { fetchImpl = fetch, pace, wait = sleep } = {}) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await pace();
+    let response;
+    try {
+      response = await fetchImpl(url, {
+        redirect: "manual", signal: AbortSignal.timeout(30000),
+        headers: { "User-Agent": USER_AGENT, Accept: "text/html,text/plain;q=0.8" },
+      });
+    } catch (error) {
+      if (!["TypeError", "TimeoutError", "AbortError"].includes(error?.name)) throw error;
+      if (attempt === 3) throw new NicheTransientError(source.id + ": network unavailable", { cause: error });
+      await wait(attempt * 1000);
+      continue;
+    }
+    if ([500, 502, 503, 504].includes(response.status)) {
+      await response.body?.cancel();
+      if (attempt === 3) throw new NicheTransientError(source.id + ": HTTP " + response.status);
+      await wait(attempt * 1000);
+      continue;
+    }
+    return response;
+  }
+}
+
 async function makeReader(source) {
   let policy = null;
   let queue = Promise.resolve();
@@ -120,11 +149,7 @@ async function makeReader(source) {
         throw new Error(source.id + ": unsafe redirect or URL");
       }
       if (!robots && !policy.allows(url)) throw new Error(source.id + ": robots disallows URL");
-      await pace();
-      const response = await fetch(url, {
-        redirect: "manual", signal: AbortSignal.timeout(30000),
-        headers: { "User-Agent": USER_AGENT, Accept: "text/html,text/plain;q=0.8" },
-      });
+      const response = await fetchNicheWithRetry(url, source, { pace });
       if ([301, 302, 303, 307, 308].includes(response.status)) {
         const location = response.headers.get("location");
         await response.body?.cancel();
@@ -259,6 +284,53 @@ export function validateNicheDetailCoverage(source, results) {
   }
 }
 
+export async function collectNicheDetails(source, candidates, read) {
+  const results = [];
+  let cursor = 0;
+  let failure = null;
+  let consecutiveTransient = 0;
+  const maxUnsupported = Math.max(3, Math.floor(candidates.length * 0.02));
+  let transientCount = 0;
+  async function worker() {
+    while (!failure && cursor < candidates.length) {
+      const item = candidates[cursor++];
+      try {
+        const response = await read(item.url);
+        let parsedDetail;
+        if ([404, 410].includes(response.status)
+            || /^\/(?:prodano|smazano)\/?$/.test(new URL(response.url).pathname)) {
+          parsedDetail = { status: "gone" };
+        } else {
+          const actual = parseNicheListing(response.url);
+          if (!actual || actual.key !== item.key) throw new Error("Unexpected detail redirect");
+          parsedDetail = parseNicheDetail(response.html, actual);
+        }
+        consecutiveTransient = 0;
+        results.push({ ...parsedDetail, key: item.key });
+        if (results.length % 250 === 0) {
+          console.log(source.id + ": details " + results.length + "/" + candidates.length);
+        }
+      } catch (error) {
+        if (!(error instanceof NicheTransientError)) {
+          failure = new Error(item.url + ": " + String(error.message || error));
+          continue;
+        }
+        // Indexed but unreachable is unknown, never proof of a removed ad.
+        results.push({ status: "unsupported", key: item.key, transient_error: true });
+        transientCount += 1;
+        consecutiveTransient += 1;
+        if (consecutiveTransient >= 5 || transientCount > maxUnsupported) {
+          failure = new Error(source.id + ": widespread transient detail failures");
+        }
+      }
+    }
+  }
+  await Promise.all([worker(), worker()]);
+  if (failure) throw failure;
+  validateNicheDetailCoverage(source, results);
+  return results;
+}
+
 async function collect(source) {
   const read = await makeReader(source);
   const root = "https://" + source.host;
@@ -284,40 +356,12 @@ async function collect(source) {
   const maxDetails = bounded(process.env.NICHE_MAX_DETAILS, 20000, 1, 50000);
   if (listings.size > maxDetails) throw new Error(source.id + ": detail budget exceeded");
   const candidates = [...listings.values()];
-  const results = [];
-  let cursor = 0;
-  let failure = null;
-  async function worker() {
-    while (!failure && cursor < candidates.length) {
-      const item = candidates[cursor++];
-      try {
-        const response = await read(item.url);
-        let parsedDetail;
-        if ([404, 410].includes(response.status)
-            || /^\/(?:prodano|smazano)\/?$/.test(new URL(response.url).pathname)) {
-          parsedDetail = { status: "gone" };
-        } else {
-          const actual = parseNicheListing(response.url);
-          if (!actual || actual.key !== item.key) throw new Error("Unexpected detail redirect");
-          parsedDetail = parseNicheDetail(response.html, actual);
-        }
-        results.push({ ...parsedDetail, key: item.key });
-        if (results.length % 250 === 0) {
-          console.log(source.id + ": details " + results.length + "/" + candidates.length);
-        }
-      } catch (error) {
-        failure = new Error(item.url + ": " + String(error.message || error));
-      }
-    }
-  }
   // Two paced workers per source; no proxies, login or challenge bypass.
-  await Promise.all([worker(), worker()]);
-  if (failure) throw failure;
-  validateNicheDetailCoverage(source, results);
+  const results = await collectNicheDetails(source, candidates, read);
   return { source, results, indexed: listings.size, pages: parsed.pages };
 }
 
-function applyCollection(db, batch, { dryRun, missingChecks }) {
+export function applyCollection(db, batch, { dryRun, missingChecks }) {
   const now = new Date().toISOString();
   const existing = db.prepare(
     "SELECT rowid, source_url, is_active, last_checked_at, missing_checks FROM vehicle_app"
@@ -338,7 +382,8 @@ function applyCollection(db, batch, { dryRun, missingChecks }) {
     source: batch.source.id, ok: true, dry_run: dryRun, indexed: batch.indexed,
     parsed: parsed.length, priced: parsed.filter((item) => item.row.price !== null).length,
     unpriced: parsed.filter((item) => item.row.price === null).length,
-    unsupported: unsupported.size, inserted: 0, updated: 0, deactivated: 0,
+    unsupported: unsupported.size, transient_errors: batch.results.filter(item => item.transient_error).length,
+    details_complete: unsupported.size === 0, inserted: 0, updated: 0, deactivated: 0,
     checked_at: now,
   };
   if (dryRun) return summary;
