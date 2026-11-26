@@ -2,14 +2,14 @@
   "version": 1,
   "parts": [
     {
-      "name": "vehicles_ai.db.gz.part000-52a4ddedf0ff84dbc5a5be442b2b6ed569d5e4c6137c690858b70483559e9994",
+      "name": "vehicles_ai.db.gz.part000-33b829f24c3686f02d52c9cff43d71ebbad33ae277e8ef066ee5f4eb4ce72cc1",
       "size": 83886080,
-      "sha256": "52a4ddedf0ff84dbc5a5be442b2b6ed569d5e4c6137c690858b70483559e9994"
+      "sha256": "33b829f24c3686f02d52c9cff43d71ebbad33ae277e8ef066ee5f4eb4ce72cc1"
     },
     {
-      "name": "vehicles_ai.db.gz.part001-1ce13f143c48556ce565adcfbe1171fe3bf374f6e64e27bac45c01d29d10f2ea",
-      "size": 31301442,
-      "sha256": "1ce13f143c48556ce565adcfbe1171fe3bf374f6e64e27bac45c01d29d10f2ea"
+      "name": "vehicles_ai.db.gz.part001-6c5146618161f3ec90f3f12ace4a9ab9832792f4028ad8bb75628b8970920bad",
+      "size": 32469749,
+      "sha256": "6c5146618161f3ec90f3f12ace4a9ab9832792f4028ad8bb75628b8970920bad"
     }
   ]
 }
